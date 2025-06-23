@@ -246,7 +246,7 @@ fn main() -> anyhow::Result<()> {
     for i in 0..args.limit {
         println!("#{}", i + 1);
         let mut fitnesses = Vec::new();
-        for instance in &instances {
+        for instance in &mut instances {
             let value = if let Some(&value) = cache.get(&instance.get_identifier()) {
                 value
             } else {
@@ -265,15 +265,27 @@ fn main() -> anyhow::Result<()> {
             if value.is_nan() {
                 return Err(anyhow!("NaN value encountered"));
             }
-            if value.is_infinite() {
-                continue;
-            }
             fitnesses.push(value);
         }
 
-        let min = fitnesses.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max = fitnesses.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let min = fitnesses
+            .iter()
+            .filter(|x| !x.is_infinite())
+            .fold(f64::INFINITY, |a, &b| a.min(b));
+        let max = fitnesses
+            .iter()
+            .filter(|x| !x.is_infinite())
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
         println!("min = {}, max = {}", min, max);
+
+        for i in 0..fitnesses.len() {
+            if fitnesses[i].is_infinite() {
+                fitnesses[i] = match args.direction {
+                    Direction::Minimize => max,
+                    Direction::Maximize => min,
+                };
+            }
+        }
 
         let mut scaled_fitnesses = Vec::new();
         for (index, fitness) in fitnesses.iter().enumerate() {
@@ -304,11 +316,6 @@ fn main() -> anyhow::Result<()> {
 
         for (index, instance) in children.into_iter().enumerate() {
             *instances[holes[index]] = instance;
-        }
-
-        for _ in 0..(args.initial - instances.len()) {
-            let instance = metadata.profile.random();
-            instances.push(Box::new(instance));
         }
     }
 

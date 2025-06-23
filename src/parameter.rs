@@ -38,9 +38,15 @@ impl Parameter {
                     todo!()
                 }
                 #[allow(irrefutable_let_patterns)]
-                if let Range::Sequence(start, _) = range {
+                if let Range::Sequence(start, end) = range {
                     if *is_even && *n % 2 != 0 {
                         if *n == *start { *n += 1 } else { *n -= 1 }
+                    }
+                    if *n < *start {
+                        *n = *start;
+                    }
+                    if *n > *end {
+                        *n = *end;
                     }
                 }
             }
@@ -132,6 +138,7 @@ impl Profile {
         for (name, parameter) in &self.0 {
             parameter.sanitize(instance.1.get_mut(name).unwrap());
         }
+        instance.0 = None;
     }
 
     pub fn random(&self) -> Instance {
@@ -145,7 +152,7 @@ impl Profile {
 }
 
 #[derive(Debug)]
-pub struct Instance(Arc<str>, FxHashMap<Arc<str>, Value>);
+pub struct Instance(Option<Arc<str>>, FxHashMap<Arc<str>, Value>);
 
 impl Instance {
     pub fn crossover(a: &Instance, b: &Instance) -> Instance {
@@ -163,10 +170,21 @@ impl Instance {
         for parameter in &mut self.1 {
             parameter.1.mutate();
         }
+        self.0 = None;
     }
 
-    pub fn get_identifier(&self) -> Arc<str> {
-        self.0.clone()
+    pub fn get_identifier(&mut self) -> Arc<str> {
+        if let None = self.0 {
+            self.0 = Some(Interner::intern(
+                &self
+                    .1
+                    .iter()
+                    .map(|(name, value)| format!("{}={}", name, value))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ));
+        }
+        self.0.clone().unwrap()
     }
 
     pub fn compiler_arguments(&self) -> Vec<String> {
@@ -189,11 +207,6 @@ impl Instance {
 
 impl From<FxHashMap<Arc<str>, Value>> for Instance {
     fn from(values: FxHashMap<Arc<str>, Value>) -> Self {
-        let identifier = values
-            .iter()
-            .map(|(name, value)| format!("{}={}", name, value))
-            .collect::<Vec<_>>()
-            .join(",");
-        Instance(Interner::intern(&identifier), values)
+        Instance(None, values)
     }
 }
