@@ -2,19 +2,16 @@ use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
 use autotuner::{metadata::Metadata, parameter::Instance};
 use hashlru::Cache;
-use lazy_static::lazy_static;
 use libloading::{Library, Symbol};
 use libnuma::{
     masks::indices::NodeIndex,
     memories::{Memory, NumaMemory},
 };
 use rand::seq::SliceRandom;
-use std::{
-    ffi, fs,
-    process::Command,
-    ptr,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use signal_hook_registry::{register_unchecked, unregister};
+use std::{ffi, fs, process::Command, ptr};
+
+const SIGSEGV: i32 = 11;
 
 enum Direction {
     Minimize,
@@ -118,14 +115,7 @@ fn initialize(
     Ok(())
 }
 
-lazy_static! {
-    static ref CRASHED: AtomicBool = AtomicBool::new(false);
-}
-
-extern "C" fn sigsegv(_: libc::c_int) {
-    CRASHED.store(true, Ordering::Relaxed);
-}
-
+#[unsafe(no_mangle)]
 fn evaluate(
     sources: &[String],
     metadata: &Metadata,
@@ -143,16 +133,17 @@ fn evaluate(
 
     let evaluator: Symbol<Evaluator> = unsafe { lib.get(metadata.evaluator.as_bytes()) }?;
     let fitness = unsafe {
-        libc::signal(libc::SIGSEGV, sigsegv as _);
+        let result = register_unchecked(SIGSEGV, |_| {
+            // can we do better than this?
+            println!("Segmentation fault occurred during evaluation");
+            std::process::exit(1);
+        });
         let fitness = evaluator(input_addresses.as_ptr(), output_block.address());
-        libc::signal(libc::SIGSEGV, libc::SIG_DFL);
+        if let Ok(id) = result {
+            unregister(id);
+        }
         fitness
     };
-
-    if CRASHED.load(Ordering::Relaxed) {
-        CRASHED.store(false, Ordering::Relaxed);
-        return Ok(f64::INFINITY);
-    }
 
     if let Some(block) = validation_block {
         let validator: Symbol<Validator> =
@@ -259,6 +250,7 @@ fn main() -> anyhow::Result<()> {
                     &output_block,
                     validation_block.as_ref(),
                 )?;
+                println!("ret");
                 cache.insert(instance.get_identifier(), value);
                 value
             };

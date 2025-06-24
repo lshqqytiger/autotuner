@@ -68,12 +68,12 @@ dependencies = [
  "hashlru",
  "inquire",
  "lazy_static",
- "libc",
  "libloading",
  "libnuma",
  "rand",
  "serde",
  "serde_json",
+ "signal-hook-registry",
 ]
 
 [[package]]
