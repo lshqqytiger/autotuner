@@ -46,7 +46,7 @@ struct Arguments {
     /// initial population size (default: 32)
     initial: usize,
 
-    #[argh(option, short = 'n', default = "24")]
+    #[argh(option, short = 'n', default = "16")]
     /// number of instances that will be made at each generation (default: 24)
     ngeneration: usize,
 
@@ -115,7 +115,6 @@ fn initialize(
     Ok(())
 }
 
-#[unsafe(no_mangle)]
 fn evaluate(
     sources: &[String],
     metadata: &Metadata,
@@ -157,27 +156,37 @@ fn evaluate(
 }
 
 fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usize> {
-    let start = rand::random_range(0.0..1.0);
-    let pointers: Vec<f64> = (0..n)
-        .map(|i| start + (i as f64) * (1.0 / n as f64))
-        .collect();
+    assert!(!roulette.is_empty());
+    assert_ne!(n, 0);
+
+    let total_fitness: f64 = roulette.iter().map(|(fitness, _)| fitness).sum();
+    assert!(total_fitness > 0.0);
+
+    let distance = total_fitness / n as f64;
+
+    let start = rand::random::<f64>() * distance;
 
     let mut selected = Vec::with_capacity(n);
-    let mut i = 0;
-    let mut sum_fitness = 0.0;
+    let mut current_sum = 0.0;
+    let mut current_index = 0;
 
-    for (fitness, index) in roulette {
-        sum_fitness += fitness;
+    for i in 0..n {
+        let pointer = start + i as f64 * distance;
 
-        while i < n && sum_fitness >= pointers[i] {
-            selected.push(*index);
-            i += 1;
+        while current_sum < pointer && current_index < roulette.len() {
+            current_sum += roulette[current_index].0;
+            if current_sum >= pointer {
+                selected.push(roulette[current_index].1);
+                break;
+            }
+            current_index += 1;
         }
 
-        if i == n {
-            break;
+        if selected.len() <= i {
+            selected.push(roulette[roulette.len() - 1].1);
         }
     }
+
     selected
 }
 
@@ -236,8 +245,9 @@ fn main() -> anyhow::Result<()> {
     let mut rng = rand::rng();
     for i in 0..args.limit {
         println!("#{}", i + 1);
-        let mut fitnesses = Vec::new();
-        for instance in &mut instances {
+        let mut results = Vec::new();
+        for i in 0..instances.len() {
+            let instance = &mut instances[i];
             let value = if let Some(&value) = cache.get(&instance.get_identifier()) {
                 value
             } else {
@@ -250,56 +260,57 @@ fn main() -> anyhow::Result<()> {
                     &output_block,
                     validation_block.as_ref(),
                 )?;
-                println!("ret");
                 cache.insert(instance.get_identifier(), value);
                 value
             };
             if value.is_nan() {
                 return Err(anyhow!("NaN value encountered"));
             }
-            fitnesses.push(value);
+            results.push((value, i));
         }
 
-        let min = fitnesses
+        let min = results
             .iter()
-            .filter(|x| !x.is_infinite())
-            .fold(f64::INFINITY, |a, &b| a.min(b));
-        let max = fitnesses
+            .filter(|(x, _)| !x.is_infinite())
+            .fold(f64::INFINITY, |a, &b| a.min(b.0));
+        let max = results
             .iter()
-            .filter(|x| !x.is_infinite())
-            .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            .filter(|(x, _)| !x.is_infinite())
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b.0));
         println!("min = {}, max = {}", min, max);
 
-        for i in 0..fitnesses.len() {
-            if fitnesses[i].is_infinite() {
-                fitnesses[i] = match args.direction {
-                    Direction::Minimize => max,
-                    Direction::Maximize => min,
-                };
+        let mut inversed = results.clone();
+        for pair in &mut inversed {
+            if pair.0.is_infinite() {
+                pair.0 = max;
+                continue;
             }
-        }
 
-        let mut scaled_fitnesses = Vec::new();
-        for (index, fitness) in fitnesses.iter().enumerate() {
-            scaled_fitnesses.push((
-                match args.direction {
-                    Direction::Minimize => (fitness - min) / (max - min),
-                    Direction::Maximize => (max - fitness) / (max - min),
-                },
-                index,
-            ));
+            pair.0 = match args.direction {
+                Direction::Minimize => pair.0,
+                Direction::Maximize => max - pair.0,
+            };
         }
-        scaled_fitnesses.shuffle(&mut rng);
-        let holes = stochastic_universal_sampling(&scaled_fitnesses, args.ngeneration);
+        inversed.shuffle(&mut rng);
+        let holes = stochastic_universal_sampling(&inversed, args.ngeneration);
+        drop(inversed);
 
-        for tuple in scaled_fitnesses.iter_mut() {
-            tuple.0 = 1.0 - tuple.0;
+        for result in &mut results {
+            if result.0.is_infinite() {
+                result.0 = min;
+                continue;
+            }
+
+            result.0 = match args.direction {
+                Direction::Minimize => max - result.0,
+                Direction::Maximize => result.0,
+            };
         }
-        scaled_fitnesses.shuffle(&mut rng);
+        results.shuffle(&mut rng);
 
         let mut children = Vec::with_capacity(args.ngeneration);
         for _ in 0..args.ngeneration {
-            let result = stochastic_universal_sampling(&scaled_fitnesses, 2);
+            let result = stochastic_universal_sampling(&results, 2);
             let mut child = Instance::crossover(&instances[result[0]], &instances[result[1]]);
             child.mutate();
             metadata.profile.sanitize(&mut child);
