@@ -1,11 +1,7 @@
-use crate::interner::Interner;
+use crate::{interner::Interner, mapping::Mapping};
 use fxhash::FxHashMap;
-use pyo3::{
-    PyResult, Python,
-    types::{IntoPyDict, PyAnyMethods},
-};
 use serde::{Deserialize, Serialize};
-use std::{ffi::CString, fmt::Display, hash::Hash, str::FromStr, sync::Arc};
+use std::{fmt::Display, hash::Hash, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
 pub enum Range {
@@ -14,7 +10,10 @@ pub enum Range {
 
 #[derive(Serialize, Deserialize)]
 pub enum Parameter {
-    Integer { range: Range },
+    Integer {
+        mapping: Option<Mapping<i32>>,
+        range: Range,
+    },
     Switch,
 }
 
@@ -23,7 +22,7 @@ impl Parameter {
 
     fn sanitize(&self, code: Code) -> Code {
         match (self, code) {
-            (Parameter::Integer { range }, Code::Integer(n)) => {
+            (Parameter::Integer { mapping: _, range }, Code::Integer(n)) => {
                 #[allow(irrefutable_let_patterns)]
                 if let Range::Sequence(start, end) = range {
                     if n < *start {
@@ -41,16 +40,15 @@ impl Parameter {
     }
 
     pub fn random(&self) -> Code {
-        let code = match self {
-            Parameter::Integer { range } => {
+        match self {
+            Parameter::Integer { mapping: _, range } => {
                 let value = match range {
                     Range::Sequence(start, end) => rand::random_range(*start..=*end),
                 };
                 Code::Integer(value)
             }
             Parameter::Switch => Code::Switch(rand::random()),
-        };
-        self.sanitize(code)
+        }
     }
 }
 
@@ -79,7 +77,10 @@ impl Code {
         match self {
             Code::Integer(n) => {
                 // variation in -10% ~ +10% of the value
-                let range = (*n as f64 * 0.1) as i32;
+                let mut range = (*n as f64 * 0.1) as i32;
+                if range == 0 {
+                    range = 1;
+                }
                 *n += rand::random_range(-range..=range);
             }
             Code::Switch(b) => {
@@ -101,65 +102,6 @@ impl Display for Code {
     }
 }
 
-trait Map<T> {
-    fn map(&self, value: &T) -> T;
-}
-
-#[derive(Clone)]
-pub struct Mapping(CString);
-
-impl Mapping {
-    pub fn new(mapping: String) -> Arc<Self> {
-        Arc::new(Mapping(CString::new(mapping).unwrap()))
-    }
-}
-
-impl FromStr for Mapping {
-    type Err = std::ffi::NulError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Mapping(CString::new(s)?))
-    }
-}
-
-impl ToString for Mapping {
-    fn to_string(&self) -> String {
-        self.0.to_string_lossy().into_owned()
-    }
-}
-
-impl Serialize for Mapping {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for Mapping {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Mapping::from_str(&s).map_err(serde::de::Error::custom)
-    }
-}
-
-impl Map<i32> for Mapping {
-    fn map(&self, value: &i32) -> i32 {
-        let result: PyResult<i32> = Python::with_gil(|python| {
-            let locals = [("x", value)].into_py_dict(python)?;
-            let result = python
-                .eval(self.0.as_c_str(), None, Some(&locals))?
-                .extract()?;
-            Ok(result)
-        });
-        result.expect("mapping error from Python")
-    }
-}
-
 enum Value {
     Integer(i32),
     Switch(bool),
@@ -175,22 +117,11 @@ impl Display for Value {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Profile(FxHashMap<Arc<str>, (Parameter, Option<Arc<Mapping>>)>);
+pub struct Profile(FxHashMap<Arc<str>, Parameter>);
 
 impl Profile {
-    fn new(profile: FxHashMap<Arc<str>, (Parameter, Option<Arc<Mapping>>)>) -> Arc<Self> {
+    pub fn new(profile: FxHashMap<Arc<str>, Parameter>) -> Arc<Self> {
         Arc::new(Profile(profile))
-    }
-
-    pub fn from(profile: FxHashMap<Arc<str>, (Parameter, Option<Mapping>)>) -> Arc<Self> {
-        Profile::new(
-            profile
-                .into_iter()
-                .map(|(name, (parameter, mapping))| {
-                    (name, (parameter, mapping.map(|x| Arc::new(x))))
-                })
-                .collect(),
-        )
     }
 
     pub fn random(self: &Arc<Profile>) -> Instance {
@@ -198,17 +129,13 @@ impl Profile {
             self.clone(),
             self.0
                 .iter()
-                .map(|(name, (parameter, _))| (name.clone(), parameter.random()))
+                .map(|(name, parameter)| (name.clone(), parameter.random()))
                 .collect::<FxHashMap<Arc<str>, Code>>(),
         )
     }
 
-    fn get(&self, name: &str) -> Option<&Parameter> {
-        self.0.get(name).map(|(parameter, _)| parameter)
-    }
-
-    fn get_mapping(&self, name: &str) -> Option<Arc<Mapping>> {
-        self.0.get(name).and_then(|pair| pair.1.clone())
+    fn get_unchecked(&self, name: &str) -> &Parameter {
+        self.0.get(name).unwrap()
     }
 }
 
@@ -257,7 +184,7 @@ impl Instance {
         for (name, parameter) in self.parameters {
             parameters.insert(
                 name.clone(),
-                self.profile.get(&name).unwrap().sanitize(parameter),
+                self.profile.get_unchecked(&name).sanitize(parameter),
             );
         }
         Instance::new(self.profile.clone(), parameters)
@@ -267,11 +194,17 @@ impl Instance {
         self.parameters.iter().map(|(name, code)| match code {
             Code::Integer(x) => (
                 name,
-                Value::Integer(if let Some(mapping) = self.profile.get_mapping(name) {
-                    mapping.map(x)
-                } else {
-                    *x
-                }),
+                Value::Integer(
+                    if let Parameter::Integer {
+                        mapping: Some(mapping),
+                        range: _,
+                    } = self.profile.get_unchecked(name)
+                    {
+                        mapping.map(*x)
+                    } else {
+                        *x
+                    },
+                ),
             ),
             Code::Switch(x) => (name, Value::Switch(*x)),
         })

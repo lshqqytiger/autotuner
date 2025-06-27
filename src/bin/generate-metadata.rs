@@ -1,7 +1,8 @@
 use autotuner::{
     interner::Interner,
+    mapping::Mapping,
     metadata::Metadata,
-    parameter::{Mapping, Parameter, Profile, Range},
+    parameter::{Parameter, Profile, Range},
 };
 use fxhash::FxHashMap;
 use inquire::{CustomType, Select, Text, validator::Validation};
@@ -43,19 +44,19 @@ fn main() -> anyhow::Result<()> {
                     }
                     _ => unreachable!(),
                 };
-                let mapping = CustomType::<Mapping>::new("How to represent this parameter")
+                let mapping = CustomType::<Mapping<i32>>::new("How to represent this parameter")
                     .with_help_message("Enter a formulaic form of the parameter (optional)")
                     .prompt_skippable()?;
 
-                (Parameter::Integer { range }, mapping)
+                Parameter::Integer { mapping, range }
             }
-            "Switch" => (Parameter::Switch, None),
+            "Switch" => Parameter::Switch,
             _ => unreachable!(),
         };
         profile.insert(Interner::intern(&name), parameter);
     }
 
-    let profile = Profile::from(profile);
+    let profile = Profile::new(profile);
 
     let initializer = Text::new("Initializer")
         .with_help_message("Enter the name of the initializer function")
