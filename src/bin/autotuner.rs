@@ -3,10 +3,6 @@ use argh::{FromArgValue, FromArgs};
 use autotuner::{metadata::Metadata, parameter::Instance};
 use hashlru::Cache;
 use libloading::{Library, Symbol};
-use libnuma::{
-    masks::indices::NodeIndex,
-    memories::{Memory, NumaMemory},
-};
 use rand::seq::SliceRandom;
 use signal_hook_registry::{register_unchecked, unregister};
 use std::{ffi, fs, process::Command, ptr};
@@ -59,10 +55,17 @@ struct Arguments {
     cache_size: usize,
 }
 
-type Initializer =
-    unsafe extern "C" fn(args_in: *const *mut ffi::c_void, arg_val: *mut ffi::c_void);
-type Evaluator =
-    unsafe extern "C" fn(args_in: *const *mut ffi::c_void, arg_out: *mut ffi::c_void) -> f64;
+type Initializer = unsafe extern "C" fn(
+    arg_in: *mut *mut ffi::c_void,
+    arg_out: *mut *mut ffi::c_void,
+    arg_val: *mut *mut ffi::c_void,
+);
+type Finalizer = unsafe extern "C" fn(
+    arg_in: *mut ffi::c_void,
+    arg_out: *mut ffi::c_void,
+    arg_val: *mut ffi::c_void,
+);
+type Evaluator = unsafe extern "C" fn(arg_in: *mut ffi::c_void, arg_out: *mut ffi::c_void) -> f64;
 type Validator =
     unsafe extern "C" fn(arg_val: *const ffi::c_void, arg_out: *const ffi::c_void) -> bool;
 
@@ -91,22 +94,46 @@ fn compile(
 fn initialize(
     sources: &[String],
     metadata: &Metadata,
-    input_blocks: &[NumaMemory],
-    validation_block: Option<&NumaMemory>,
+    input_ptr: &mut *mut ffi::c_void,
+    output_ptr: &mut *mut ffi::c_void,
+    validation_ptr: Option<&mut *mut ffi::c_void>,
 ) -> anyhow::Result<()> {
     let lib = compile(sources, metadata, None)?;
-
-    let mut input_addresses = Vec::with_capacity(input_blocks.len());
-    for block in input_blocks {
-        input_addresses.push(block.address());
-    }
-
     let initializer: Symbol<Initializer> = unsafe { lib.get(metadata.initializer.as_bytes()) }?;
     unsafe {
         initializer(
-            input_addresses.as_ptr(),
-            if let Some(block) = validation_block {
-                block.address()
+            &mut *input_ptr,
+            &mut *output_ptr,
+            if let Some(ptr) = validation_ptr {
+                &mut *ptr
+            } else {
+                ptr::null_mut()
+            },
+        );
+    }
+    Ok(())
+}
+
+fn finalize(
+    sources: &[String],
+    metadata: &Metadata,
+    input_ptr: *mut ffi::c_void,
+    output_ptr: *mut ffi::c_void,
+    validation_ptr: Option<*mut ffi::c_void>,
+) -> anyhow::Result<()> {
+    if let None = metadata.finalizer {
+        return Ok(());
+    }
+
+    let lib = compile(sources, metadata, None)?;
+    let finalizer: Symbol<Finalizer> =
+        unsafe { lib.get(metadata.finalizer.as_ref().unwrap().as_bytes()) }?;
+    unsafe {
+        finalizer(
+            input_ptr,
+            output_ptr,
+            if let Some(ptr) = validation_ptr {
+                ptr
             } else {
                 ptr::null_mut()
             },
@@ -119,17 +146,11 @@ fn evaluate(
     sources: &[String],
     metadata: &Metadata,
     instance: &Instance,
-    input_blocks: &[NumaMemory],
-    output_block: &NumaMemory,
-    validation_block: Option<&NumaMemory>,
+    input_ptr: *mut ffi::c_void,
+    output_ptr: *mut ffi::c_void,
+    validation_ptr: Option<*mut ffi::c_void>,
 ) -> anyhow::Result<f64> {
     let lib = compile(sources, metadata, Some(instance))?;
-
-    let mut input_addresses = Vec::with_capacity(input_blocks.len());
-    for block in input_blocks {
-        input_addresses.push(block.address());
-    }
-
     let evaluator: Symbol<Evaluator> = unsafe { lib.get(metadata.evaluator.as_bytes()) }?;
     let fitness = unsafe {
         let result = register_unchecked(SIGSEGV, |_| {
@@ -137,17 +158,17 @@ fn evaluate(
             println!("Segmentation fault occurred during evaluation");
             std::process::exit(1);
         });
-        let fitness = evaluator(input_addresses.as_ptr(), output_block.address());
+        let fitness = evaluator(input_ptr, output_ptr);
         if let Ok(id) = result {
             unregister(id);
         }
         fitness
     };
 
-    if let Some(block) = validation_block {
+    if let Some(block) = validation_ptr {
         let validator: Symbol<Validator> =
             unsafe { lib.get(metadata.validator.as_ref().unwrap().as_bytes()) }?;
-        if !unsafe { validator(block.address(), output_block.address()) } {
+        if !unsafe { validator(block, output_ptr) } {
             return Ok(f64::INFINITY);
         }
     }
@@ -212,34 +233,19 @@ fn main() -> anyhow::Result<()> {
         instances.push(Box::new(instance));
     }
 
-    let numa_node = metadata.numa_node.map(NodeIndex::new);
-    let mut input_blocks = Vec::with_capacity(metadata.input_blocks.len());
-    for block in &metadata.input_blocks {
-        let memory = if let Some(node) = numa_node {
-            NumaMemory::allocate_on_node(*block, node)
-        } else {
-            NumaMemory::allocate_local(*block)
-        };
-        input_blocks.push(memory);
-    }
-    let output_block = if let Some(node) = numa_node {
-        NumaMemory::allocate_on_node(metadata.output_block, node)
+    let mut input_ptr = ptr::null_mut();
+    let mut output_ptr = ptr::null_mut();
+    let mut validation_ptr = if metadata.validator.is_some() {
+        Some(ptr::null_mut())
     } else {
-        NumaMemory::allocate_local(metadata.output_block)
+        None
     };
-    let validation_block = metadata.validator.as_ref().map(|_| {
-        if let Some(node) = numa_node {
-            NumaMemory::allocate_on_node(metadata.output_block, node)
-        } else {
-            NumaMemory::allocate_local(metadata.output_block)
-        }
-    });
-
     initialize(
         &args.sources,
         &metadata,
-        &input_blocks,
-        validation_block.as_ref(),
+        &mut input_ptr,
+        &mut output_ptr,
+        validation_ptr.as_mut(),
     )?;
 
     let mut rng = rand::rng();
@@ -256,9 +262,9 @@ fn main() -> anyhow::Result<()> {
                     &args.sources,
                     &metadata,
                     instance,
-                    &input_blocks,
-                    &output_block,
-                    validation_block.as_ref(),
+                    input_ptr,
+                    output_ptr,
+                    validation_ptr,
                 )?;
                 cache.insert(instance.get_identifier(), value);
                 value
@@ -322,9 +328,13 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    drop(input_blocks);
-    drop(output_block);
-    drop(validation_block);
+    finalize(
+        &args.sources,
+        &metadata,
+        input_ptr,
+        output_ptr,
+        validation_ptr,
+    )?;
 
     let mut results = Vec::new();
     for v in cache {

@@ -64,29 +64,13 @@ fn main() -> anyhow::Result<()> {
 
     let profile = Profile(profile);
 
-    let num_input_blocks = CustomType::<usize>::new("Number of input blocks")
-        .with_help_message("Enter the number of input blocks of the kernel")
-        .with_default(2)
-        .prompt()?;
-    let mut input_blocks = Vec::with_capacity(num_input_blocks);
-    for i in 0..num_input_blocks {
-        let block_size = CustomType::<usize>::new(&format!("Size of input block #{}", i + 1))
-            .with_help_message("Enter the size of the input block in bytes")
-            .prompt()?;
-        input_blocks.push(block_size);
-    }
-
-    let output_block = CustomType::<usize>::new("Size of output block")
-        .with_help_message("Enter the size of the output block in bytes")
-        .prompt()?;
-
-    let numa_node = CustomType::<u8>::new("NUMA node")
-        .with_help_message("Enter the NUMA node to allocate blocks on")
-        .prompt_skippable()?;
-
     let initializer = Text::new("Initializer")
         .with_help_message("Enter the name of the initializer function")
         .prompt()?;
+
+    let finalizer = Text::new("Finalizer")
+        .with_help_message("Enter the name of the finalizer function (optional)")
+        .prompt_skippable()?;
 
     let evaluator = Text::new("Evaluator")
         .with_help_message("Enter the name of the evaluator function")
@@ -112,10 +96,8 @@ fn main() -> anyhow::Result<()> {
 
     let metadata = Metadata {
         profile,
-        input_blocks,
-        output_block,
-        numa_node,
         initializer,
+        finalizer,
         evaluator,
         validator,
         compiler,
