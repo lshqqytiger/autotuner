@@ -1,10 +1,10 @@
 use autotuner::{
     interner::Interner,
     metadata::Metadata,
-    parameter::{Parameter, Profile, Range},
+    parameter::{Mapping, Parameter, Profile, Range},
 };
 use fxhash::FxHashMap;
-use inquire::{Confirm, CustomType, Select, Text, validator::Validation};
+use inquire::{CustomType, Select, Text, validator::Validation};
 use std::fs;
 
 #[cfg(target_arch = "aarch64")]
@@ -25,9 +25,6 @@ fn main() -> anyhow::Result<()> {
         let typ = Select::new("Parameter type", Parameter::TYPES.to_vec()).prompt()?;
         let parameter = match typ {
             "Integer" => {
-                let is_even = Confirm::new(&format!("Should {} be an even number?", name))
-                    .with_default(false)
-                    .prompt()?;
                 let range = match Select::new("Range Type", vec!["Sequence"]).prompt()? {
                     "Sequence" => {
                         let start: i32 = CustomType::<i32>::new("- Minimum").prompt()?;
@@ -46,23 +43,19 @@ fn main() -> anyhow::Result<()> {
                     }
                     _ => unreachable!(),
                 };
-                let condition = Text::new("Additional conditions")
-                    .with_help_message("Enter the boolean expression (e.g., A + B < 256)")
+                let mapping = CustomType::<Mapping>::new("How to represent this parameter")
+                    .with_help_message("Enter a formulaic form of the parameter (optional)")
                     .prompt_skippable()?;
 
-                Parameter::Integer {
-                    is_even,
-                    range,
-                    condition,
-                }
+                (Parameter::Integer { range }, mapping)
             }
-            "Switch" => Parameter::Switch,
+            "Switch" => (Parameter::Switch, None),
             _ => unreachable!(),
         };
         profile.insert(Interner::intern(&name), parameter);
     }
 
-    let profile = Profile(profile);
+    let profile = Profile::from(profile);
 
     let initializer = Text::new("Initializer")
         .with_help_message("Enter the name of the initializer function")

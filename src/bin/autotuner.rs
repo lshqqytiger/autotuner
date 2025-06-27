@@ -5,7 +5,7 @@ use hashlru::Cache;
 use libloading::{Library, Symbol};
 use rand::seq::SliceRandom;
 use signal_hook_registry::{register_unchecked, unregister};
-use std::{ffi, fs, process::Command, ptr};
+use std::{ffi, fs, process::Command, ptr, rc::Rc};
 
 const SIGSEGV: i32 = 11;
 
@@ -230,7 +230,7 @@ fn main() -> anyhow::Result<()> {
     let mut instances = Vec::new();
     for _ in 0..args.initial {
         let instance = metadata.profile.random();
-        instances.push(Box::new(instance));
+        instances.push(Rc::new(instance));
     }
 
     let mut input_ptr = ptr::null_mut();
@@ -253,20 +253,20 @@ fn main() -> anyhow::Result<()> {
         println!("#{}", i + 1);
         let mut results = Vec::new();
         for i in 0..instances.len() {
-            let instance = &mut instances[i];
-            let value = if let Some(&value) = cache.get(&instance.get_identifier()) {
+            let instance = instances[i].clone();
+            let value = if let Some(&value) = cache.get(&instance) {
                 value
             } else {
-                println!("Running kernel {}", instance.get_identifier());
+                println!("Running kernel {}", instance);
                 let value = evaluate(
                     &args.sources,
                     &metadata,
-                    instance,
+                    &instance,
                     input_ptr,
                     output_ptr,
                     validation_ptr,
                 )?;
-                cache.insert(instance.get_identifier(), value);
+                cache.insert(instance, value);
                 value
             };
             if value.is_nan() {
@@ -317,14 +317,14 @@ fn main() -> anyhow::Result<()> {
         let mut children = Vec::with_capacity(args.ngeneration);
         for _ in 0..args.ngeneration {
             let result = stochastic_universal_sampling(&results, 2);
-            let mut child = Instance::crossover(&instances[result[0]], &instances[result[1]]);
-            child.mutate();
-            metadata.profile.sanitize(&mut child);
+            let child = Instance::crossover(&instances[result[0]], &instances[result[1]]);
+            let child = child.mutate();
+            let child = child.sanitize();
             children.push(child);
         }
 
         for (index, instance) in children.into_iter().enumerate() {
-            *instances[holes[index]] = instance;
+            instances[holes[index]] = Rc::new(instance);
         }
     }
 
@@ -337,8 +337,8 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     let mut results = Vec::new();
-    for v in cache {
-        results.push(v);
+    for (instance, fitness) in cache {
+        results.push((format!("{}", instance), fitness));
     }
     results.sort_by(|a, b| a.1.total_cmp(&b.1));
 

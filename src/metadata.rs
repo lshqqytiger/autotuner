@@ -1,9 +1,10 @@
 use crate::parameter::Profile;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Serialize, Deserialize)]
 pub struct Metadata {
-    pub profile: Profile,
+    pub profile: Arc<Profile>,
     pub initializer: String,
     pub finalizer: Option<String>,
     pub evaluator: String,

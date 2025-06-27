@@ -1,10 +1,11 @@
 use crate::interner::Interner;
 use fxhash::FxHashMap;
-use serde::{Deserialize, Serialize};
-use std::{
-    fmt::{Debug, Display},
-    sync::Arc,
+use pyo3::{
+    PyResult, Python,
+    types::{IntoPyDict, PyAnyMethods},
 };
+use serde::{Deserialize, Serialize};
+use std::{ffi::CString, fmt::Display, hash::Hash, str::FromStr, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
 pub enum Range {
@@ -13,82 +14,61 @@ pub enum Range {
 
 #[derive(Serialize, Deserialize)]
 pub enum Parameter {
-    Integer {
-        is_even: bool,
-        range: Range,
-        condition: Option<String>,
-    },
+    Integer { range: Range },
     Switch,
 }
 
 impl Parameter {
     pub const TYPES: [&str; 2] = ["Integer", "Switch"];
 
-    fn sanitize(&self, value: &mut Value) {
-        match (self, value) {
-            (
-                Parameter::Integer {
-                    is_even,
-                    range,
-                    condition,
-                },
-                Value::Integer(n),
-            ) => {
-                if condition.as_ref().is_some_and(|x| !x.is_empty()) {
-                    todo!()
-                }
+    fn sanitize(&self, code: Code) -> Code {
+        match (self, code) {
+            (Parameter::Integer { range }, Code::Integer(n)) => {
                 #[allow(irrefutable_let_patterns)]
                 if let Range::Sequence(start, end) = range {
-                    if *is_even && *n % 2 != 0 {
-                        if *n == *start { *n += 1 } else { *n -= 1 }
+                    if n < *start {
+                        return Code::Integer(*start);
                     }
-                    if *n < *start {
-                        *n = *start;
-                    }
-                    if *n > *end {
-                        *n = *end;
+                    if n > *end {
+                        return Code::Integer(*end);
                     }
                 }
+                Code::Integer(n)
             }
-            (Parameter::Switch, Value::Switch(_)) => {}
+            (Parameter::Switch, Code::Switch(x)) => Code::Switch(x),
             _ => unreachable!(),
         }
     }
 
-    pub fn random(&self) -> Value {
-        let mut value = match self {
-            Parameter::Integer {
-                is_even: _,
-                range,
-                condition: _,
-            } => {
+    pub fn random(&self) -> Code {
+        let code = match self {
+            Parameter::Integer { range } => {
                 let value = match range {
                     Range::Sequence(start, end) => rand::random_range(*start..=*end),
                 };
-                Value::Integer(value)
+                Code::Integer(value)
             }
-            Parameter::Switch => Value::Switch(rand::random()),
+            Parameter::Switch => Code::Switch(rand::random()),
         };
-        self.sanitize(&mut value);
-        value
+        self.sanitize(code)
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum Value {
+#[derive(Clone)]
+pub enum Code {
     Integer(i32),
     Switch(bool),
 }
 
-impl Value {
-    fn crossover(a: &Value, b: &Value) -> Value {
+impl Code {
+    fn crossover(a: &Code, b: &Code) -> Code {
         match (a, b) {
-            (Value::Integer(a), Value::Integer(b)) => Value::Integer((*a + *b) / 2),
-            (Value::Switch(a), Value::Switch(b)) => {
+            (Code::Integer(a), Code::Integer(b)) => Code::Integer((*a + *b) / 2),
+            (Code::Switch(a), Code::Switch(b)) => {
                 if *a == *b {
-                    Value::Switch(*a)
+                    Code::Switch(*a)
                 } else {
-                    Value::Switch(rand::random())
+                    Code::Switch(rand::random())
                 }
             }
             _ => unreachable!(),
@@ -97,12 +77,12 @@ impl Value {
 
     fn mutate(&mut self) {
         match self {
-            Value::Integer(n) => {
+            Code::Integer(n) => {
                 // variation in -10% ~ +10% of the value
                 let range = (*n as f64 * 0.1) as i32;
                 *n += rand::random_range(-range..=range);
             }
-            Value::Switch(b) => {
+            Code::Switch(b) => {
                 // 10% chance to flip the switch
                 if rand::random_ratio(1, 10) {
                     *b = rand::random();
@@ -110,6 +90,79 @@ impl Value {
             }
         }
     }
+}
+
+impl Display for Code {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Code::Integer(n) => write!(f, "{}", n),
+            Code::Switch(b) => write!(f, "{}", if *b { "true" } else { "false" }),
+        }
+    }
+}
+
+trait Map<T> {
+    fn map(&self, value: &T) -> T;
+}
+
+#[derive(Clone)]
+pub struct Mapping(CString);
+
+impl Mapping {
+    pub fn new(mapping: String) -> Arc<Self> {
+        Arc::new(Mapping(CString::new(mapping).unwrap()))
+    }
+}
+
+impl FromStr for Mapping {
+    type Err = std::ffi::NulError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Mapping(CString::new(s)?))
+    }
+}
+
+impl ToString for Mapping {
+    fn to_string(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
+}
+
+impl Serialize for Mapping {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Mapping {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Mapping::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Map<i32> for Mapping {
+    fn map(&self, value: &i32) -> i32 {
+        let result: PyResult<i32> = Python::with_gil(|python| {
+            let locals = [("x", value)].into_py_dict(python)?;
+            let result = python
+                .eval(self.0.as_c_str(), None, Some(&locals))?
+                .extract()?;
+            Ok(result)
+        });
+        result.expect("mapping error from Python")
+    }
+}
+
+enum Value {
+    Integer(i32),
+    Switch(bool),
 }
 
 impl Display for Value {
@@ -121,82 +174,117 @@ impl Display for Value {
     }
 }
 
-impl Debug for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::Integer(_) => write!(f, "Integer({})", self),
-            Value::Switch(_) => write!(f, "Switch({})", self),
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize)]
-pub struct Profile(pub FxHashMap<Arc<str>, Parameter>);
+pub struct Profile(FxHashMap<Arc<str>, (Parameter, Option<Arc<Mapping>>)>);
 
 impl Profile {
-    pub fn sanitize(&self, instance: &mut Instance) {
-        for (name, parameter) in &self.0 {
-            parameter.sanitize(instance.1.get_mut(name).unwrap());
-        }
-        instance.0 = None;
+    fn new(profile: FxHashMap<Arc<str>, (Parameter, Option<Arc<Mapping>>)>) -> Arc<Self> {
+        Arc::new(Profile(profile))
     }
 
-    pub fn random(&self) -> Instance {
-        Instance::from(
+    pub fn from(profile: FxHashMap<Arc<str>, (Parameter, Option<Mapping>)>) -> Arc<Self> {
+        Profile::new(
+            profile
+                .into_iter()
+                .map(|(name, (parameter, mapping))| {
+                    (name, (parameter, mapping.map(|x| Arc::new(x))))
+                })
+                .collect(),
+        )
+    }
+
+    pub fn random(self: &Arc<Profile>) -> Instance {
+        Instance::new(
+            self.clone(),
             self.0
                 .iter()
-                .map(|(name, parameter)| (name.clone(), parameter.random()))
-                .collect::<FxHashMap<Arc<str>, Value>>(),
+                .map(|(name, (parameter, _))| (name.clone(), parameter.random()))
+                .collect::<FxHashMap<Arc<str>, Code>>(),
         )
+    }
+
+    fn get(&self, name: &str) -> Option<&Parameter> {
+        self.0.get(name).map(|(parameter, _)| parameter)
+    }
+
+    fn get_mapping(&self, name: &str) -> Option<Arc<Mapping>> {
+        self.0.get(name).and_then(|pair| pair.1.clone())
     }
 }
 
-#[derive(Debug)]
-pub struct Instance(Option<Arc<str>>, FxHashMap<Arc<str>, Value>);
+pub struct Instance {
+    id: Arc<str>,
+    profile: Arc<Profile>,
+    parameters: FxHashMap<Arc<str>, Code>,
+}
 
 impl Instance {
-    pub fn crossover(a: &Instance, b: &Instance) -> Instance {
-        let mut parameters = FxHashMap::default();
-        for parameter in &a.1 {
-            parameters.insert(
-                parameter.0.clone(),
-                Value::crossover(&a.1[parameter.0], &b.1[parameter.0]),
-            );
-        }
-        Instance::from(parameters)
-    }
-
-    pub fn mutate(&mut self) {
-        for parameter in &mut self.1 {
-            parameter.1.mutate();
-        }
-        self.0 = None;
-    }
-
-    pub fn get_identifier(&mut self) -> Arc<str> {
-        if let None = self.0 {
-            self.0 = Some(Interner::intern(
-                &self
-                    .1
+    pub fn new(profile: Arc<Profile>, parameters: FxHashMap<Arc<str>, Code>) -> Self {
+        Instance {
+            id: Interner::intern(
+                &parameters
                     .iter()
-                    .map(|(name, value)| format!("{}={}", name, value))
+                    .map(|(name, code)| format!("{}={}", name, code))
                     .collect::<Vec<_>>()
                     .join(","),
-            ));
+            ),
+            profile,
+            parameters,
         }
-        self.0.clone().unwrap()
+    }
+
+    pub fn crossover(a: &Instance, b: &Instance) -> Instance {
+        let mut parameters = FxHashMap::default();
+        for parameter in &a.parameters {
+            parameters.insert(
+                parameter.0.clone(),
+                Code::crossover(&a.parameters[parameter.0], &b.parameters[parameter.0]),
+            );
+        }
+        Instance::new(a.profile.clone(), parameters)
+    }
+
+    pub fn mutate(self) -> Instance {
+        let mut parameters = self.parameters.clone();
+        for parameter in parameters.values_mut() {
+            parameter.mutate();
+        }
+        Instance::new(self.profile.clone(), parameters)
+    }
+
+    pub fn sanitize(self) -> Instance {
+        let mut parameters = FxHashMap::default();
+        for (name, parameter) in self.parameters {
+            parameters.insert(
+                name.clone(),
+                self.profile.get(&name).unwrap().sanitize(parameter),
+            );
+        }
+        Instance::new(self.profile.clone(), parameters)
+    }
+
+    fn parameters(&self) -> impl Iterator<Item = (&Arc<str>, Value)> {
+        self.parameters.iter().map(|(name, code)| match code {
+            Code::Integer(x) => (
+                name,
+                Value::Integer(if let Some(mapping) = self.profile.get_mapping(name) {
+                    mapping.map(x)
+                } else {
+                    *x
+                }),
+            ),
+            Code::Switch(x) => (name, Value::Switch(*x)),
+        })
     }
 
     pub fn compiler_arguments(&self) -> Vec<String> {
         let mut arguments = Vec::new();
-        for parameter in &self.1 {
-            match parameter.1 {
-                Value::Integer(x) => {
-                    arguments.push(format!("-D{}={}", parameter.0, x));
-                }
+        for (name, value) in self.parameters() {
+            match value {
+                Value::Integer(x) => arguments.push(format!("-D{}={}", name, x)),
                 Value::Switch(x) => {
-                    if *x {
-                        arguments.push(format!("-D{}", parameter.0));
+                    if x {
+                        arguments.push(format!("-D{}", name));
                     }
                 }
             }
@@ -205,8 +293,29 @@ impl Instance {
     }
 }
 
-impl From<FxHashMap<Arc<str>, Value>> for Instance {
-    fn from(values: FxHashMap<Arc<str>, Value>) -> Self {
-        Instance(None, values)
+impl PartialEq for Instance {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Instance {}
+
+impl Hash for Instance {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl Display for Instance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.parameters()
+                .map(|(name, value)| format!("{}={}", name, value))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
