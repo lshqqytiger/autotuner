@@ -46,6 +46,10 @@ struct Arguments {
     /// number of instances that will be made at each generation (default: 24)
     ngeneration: usize,
 
+    #[argh(option, short = 'r', default = "1")]
+    /// number of repetitions for each instance (default: 1)
+    repetition: usize,
+
     #[argh(option, short = 'l', default = "64")]
     /// maximum number of generations (default: 64)
     limit: usize,
@@ -146,24 +150,33 @@ fn evaluate(
     sources: &[String],
     metadata: &Metadata,
     instance: &Instance,
+    repetition: usize,
     input_ptr: *mut ffi::c_void,
     output_ptr: *mut ffi::c_void,
     validation_ptr: Option<*mut ffi::c_void>,
 ) -> anyhow::Result<f64> {
     let lib = compile(sources, metadata, Some(instance))?;
     let evaluator: Symbol<Evaluator> = unsafe { lib.get(metadata.evaluator.as_bytes()) }?;
-    let fitness = unsafe {
-        let result = register_unchecked(SIGSEGV, |_| {
-            // can we do better than this?
-            println!("Segmentation fault occurred during evaluation");
-            std::process::exit(1);
-        });
-        let fitness = evaluator(input_ptr, output_ptr);
-        if let Ok(id) = result {
-            unregister(id);
+    let mut fitnesses = Vec::with_capacity(repetition);
+    for _ in 0..repetition {
+        let fitness = unsafe {
+            let result = register_unchecked(SIGSEGV, |_| {
+                // can we do better than this?
+                println!("Segmentation fault occurred during evaluation");
+                std::process::exit(1);
+            });
+            let fitness = evaluator(input_ptr, output_ptr);
+            if let Ok(id) = result {
+                unregister(id);
+            }
+            fitness
+        };
+        if fitness.is_nan() {
+            return Err(anyhow!("NaN value encountered"));
         }
-        fitness
-    };
+        fitnesses.push(fitness);
+    }
+    fitnesses.sort_by(|a, b| a.total_cmp(b));
 
     if let Some(block) = validation_ptr {
         let validator: Symbol<Validator> =
@@ -173,7 +186,7 @@ fn evaluate(
         }
     }
 
-    Ok(fitness)
+    Ok(fitnesses[fitnesses.len() / 2])
 }
 
 fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usize> {
@@ -262,6 +275,7 @@ fn main() -> anyhow::Result<()> {
                     &args.sources,
                     &metadata,
                     &instance,
+                    args.repetition,
                     input_ptr,
                     output_ptr,
                     validation_ptr,
