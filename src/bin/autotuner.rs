@@ -4,8 +4,10 @@ use autotuner::{metadata::Metadata, parameter::Instance};
 use hashlru::Cache;
 use libloading::{Library, Symbol};
 use rand::seq::SliceRandom;
+use rayon::{ThreadPoolBuilder, prelude::*};
 use signal_hook_registry::{register_unchecked, unregister};
-use std::{ffi, fs, process::Command, ptr, rc::Rc};
+use std::{ffi, fs, process::Command, ptr, sync::Arc, thread};
+use tempdir::TempDir;
 
 const SIGSEGV: i32 = 11;
 
@@ -54,6 +56,10 @@ struct Arguments {
     /// maximum number of generations (default: 64)
     limit: usize,
 
+    #[argh(option, short = 'p', default = "1")]
+    /// number of instances that will be evaluated in parallel (default: 1)
+    parallelism: usize,
+
     #[argh(option, default = "4096")]
     /// cache size in number of entries (default: 4096)
     cache_size: usize,
@@ -73,16 +79,48 @@ type Evaluator = unsafe extern "C" fn(arg_in: *mut ffi::c_void, arg_out: *mut ff
 type Validator =
     unsafe extern "C" fn(arg_val: *const ffi::c_void, arg_out: *const ffi::c_void) -> bool;
 
+unsafe impl Sync for Workspace {}
+
+// TODO: input_ptr and validation_ptr can be shared between threads
+struct Workspace {
+    input_ptr: *mut ffi::c_void, // const after initialization
+    output_ptr: *mut ffi::c_void,
+    validation_ptr: Option<*mut ffi::c_void>, // const after initialization
+}
+
+impl Workspace {
+    fn new(validation: bool) -> Self {
+        Workspace {
+            input_ptr: ptr::null_mut(),
+            output_ptr: ptr::null_mut(),
+            validation_ptr: if validation {
+                Some(ptr::null_mut())
+            } else {
+                None
+            },
+        }
+    }
+}
+
+#[inline]
+fn round_up(a: usize, b: usize) -> usize {
+    (a + b - 1) / b
+}
+
 fn compile(
+    temp_dir: &TempDir,
     sources: &[String],
     metadata: &Metadata,
     instance: Option<&Instance>,
 ) -> anyhow::Result<Library> {
+    let path = temp_dir
+        .path()
+        .join(thread::current().name().unwrap_or("temp"));
     let mut compiler = Command::new(&metadata.compiler);
     let compiler = compiler
         .arg("-shared")
         .arg("-o")
-        .arg("./.temp")
+        .arg(&path)
         .args(sources)
         .args(&metadata.compiler_arguments);
     if let Some(instance) = instance {
@@ -91,25 +129,24 @@ fn compile(
     let mut compiler = compiler.spawn()?;
     compiler.wait()?;
 
-    let lib = unsafe { Library::new("./.temp") }?;
+    let lib = unsafe { Library::new(&path) }?;
     Ok(lib)
 }
 
 fn initialize(
+    temp_dir: &TempDir,
     sources: &[String],
     metadata: &Metadata,
-    input_ptr: &mut *mut ffi::c_void,
-    output_ptr: &mut *mut ffi::c_void,
-    validation_ptr: Option<&mut *mut ffi::c_void>,
+    workspace: &mut Workspace,
 ) -> anyhow::Result<()> {
-    let lib = compile(sources, metadata, None)?;
+    let lib = compile(temp_dir, sources, metadata, None)?;
     let initializer: Symbol<Initializer> = unsafe { lib.get(metadata.initializer.as_bytes()) }?;
     unsafe {
         initializer(
-            &mut *input_ptr,
-            &mut *output_ptr,
-            if let Some(ptr) = validation_ptr {
-                &mut *ptr
+            &mut workspace.input_ptr,
+            &mut workspace.output_ptr,
+            if let Some(ptr) = workspace.validation_ptr.as_mut() {
+                ptr
             } else {
                 ptr::null_mut()
             },
@@ -119,24 +156,23 @@ fn initialize(
 }
 
 fn finalize(
+    temp_dir: &TempDir,
     sources: &[String],
     metadata: &Metadata,
-    input_ptr: *mut ffi::c_void,
-    output_ptr: *mut ffi::c_void,
-    validation_ptr: Option<*mut ffi::c_void>,
+    workspace: &Workspace,
 ) -> anyhow::Result<()> {
     if let None = metadata.finalizer {
         return Ok(());
     }
 
-    let lib = compile(sources, metadata, None)?;
+    let lib = compile(temp_dir, sources, metadata, None)?;
     let finalizer: Symbol<Finalizer> =
         unsafe { lib.get(metadata.finalizer.as_ref().unwrap().as_bytes()) }?;
     unsafe {
         finalizer(
-            input_ptr,
-            output_ptr,
-            if let Some(ptr) = validation_ptr {
+            workspace.input_ptr,
+            workspace.output_ptr,
+            if let Some(ptr) = workspace.validation_ptr {
                 ptr
             } else {
                 ptr::null_mut()
@@ -147,15 +183,14 @@ fn finalize(
 }
 
 fn evaluate(
+    temp_dir: &TempDir,
     sources: &[String],
     metadata: &Metadata,
     instance: &Instance,
     repetition: usize,
-    input_ptr: *mut ffi::c_void,
-    output_ptr: *mut ffi::c_void,
-    validation_ptr: Option<*mut ffi::c_void>,
+    workspace: &Workspace,
 ) -> anyhow::Result<f64> {
-    let lib = compile(sources, metadata, Some(instance))?;
+    let lib = compile(temp_dir, sources, metadata, Some(instance))?;
     let evaluator: Symbol<Evaluator> = unsafe { lib.get(metadata.evaluator.as_bytes()) }?;
     let mut fitnesses = Vec::with_capacity(repetition);
     for _ in 0..repetition {
@@ -165,7 +200,7 @@ fn evaluate(
                 println!("Segmentation fault occurred during evaluation");
                 std::process::exit(1);
             });
-            let fitness = evaluator(input_ptr, output_ptr);
+            let fitness = evaluator(workspace.input_ptr, workspace.output_ptr);
             if let Ok(id) = result {
                 unregister(id);
             }
@@ -178,10 +213,10 @@ fn evaluate(
     }
     fitnesses.sort_by(|a, b| a.total_cmp(b));
 
-    if let Some(block) = validation_ptr {
+    if let Some(block) = workspace.validation_ptr {
         let validator: Symbol<Validator> =
             unsafe { lib.get(metadata.validator.as_ref().unwrap().as_bytes()) }?;
-        if !unsafe { validator(block, output_ptr) } {
+        if !unsafe { validator(block, workspace.output_ptr) } {
             return Ok(f64::INFINITY);
         }
     }
@@ -232,6 +267,19 @@ fn main() -> anyhow::Result<()> {
     if args.ngeneration == 0 {
         return Err(anyhow!("Number of each generation must be greater than 0"));
     }
+    if args.parallelism == 0 {
+        return Err(anyhow!(
+            "Number of instances that will be evaluated in parallel must be greater than 0"
+        ));
+    }
+
+    ThreadPoolBuilder::new()
+        .num_threads(args.parallelism)
+        .thread_name(|x| format!("t{}", x))
+        .build_global()?;
+
+    let cores = core_affinity::get_core_ids().unwrap();
+    let num_cores = cores.len();
 
     let metadata = serde_json::from_str::<Metadata>(
         &fs::read_to_string(args.metadata).expect("Failed to read kernel metadata file"),
@@ -243,50 +291,74 @@ fn main() -> anyhow::Result<()> {
     let mut instances = Vec::new();
     for _ in 0..args.initial {
         let instance = metadata.profile.random();
-        instances.push(Rc::new(instance));
+        instances.push(Arc::new(instance));
     }
 
-    let mut input_ptr = ptr::null_mut();
-    let mut output_ptr = ptr::null_mut();
-    let mut validation_ptr = if metadata.validator.is_some() {
-        Some(ptr::null_mut())
-    } else {
-        None
-    };
-    initialize(
-        &args.sources,
-        &metadata,
-        &mut input_ptr,
-        &mut output_ptr,
-        validation_ptr.as_mut(),
-    )?;
+    let temp_dir = TempDir::new("autotuner")?;
+
+    let mut workspaces = Vec::with_capacity(args.parallelism);
+    for _ in 0..args.parallelism {
+        let mut workspace = Workspace::new(metadata.validator.is_some());
+        initialize(&temp_dir, &args.sources, &metadata, &mut workspace)?;
+        workspaces.push(workspace);
+    }
 
     let mut rng = rand::rng();
     for i in 0..args.limit {
         println!("#{}", i + 1);
-        let mut results = Vec::new();
-        for i in 0..instances.len() {
-            let instance = instances[i].clone();
-            let value = if let Some(&value) = cache.get(&instance) {
-                value
-            } else {
-                println!("Running kernel {}", instance);
-                let value = evaluate(
-                    &args.sources,
-                    &metadata,
-                    &instance,
-                    args.repetition,
-                    input_ptr,
-                    output_ptr,
-                    validation_ptr,
-                )?;
-                cache.insert(instance, value);
-                value
-            };
-            if value.is_nan() {
-                return Err(anyhow!("NaN value encountered"));
+
+        let len = instances.len();
+        let mut results = Vec::with_capacity(len);
+        let mut fresh_instances = Vec::new();
+        for index in 0..len {
+            if let Some(&fitness) = cache.get(&instances[index]) {
+                results.push((fitness, index));
+                continue;
             }
-            results.push((value, i));
+            fresh_instances.push((index, instances[index].clone()));
+        }
+
+        let len = fresh_instances.len();
+        for i in 0..round_up(len, args.parallelism) {
+            let fresh_instances =
+                &fresh_instances[(i * args.parallelism)..((i + 1) * args.parallelism).min(len)];
+
+            if fresh_instances.len() == 1 {
+                println!("Running kernel {}", fresh_instances[0].1);
+            } else {
+                println!("Running kernels below: ");
+                for (_, instance) in fresh_instances {
+                    println!("- {}", instance);
+                }
+            }
+
+            let chunk: Vec<anyhow::Result<(f64, usize)>> = fresh_instances
+                .par_iter()
+                .map(|(i, instance)| {
+                    let tid = rayon::current_thread_index().unwrap_or(0);
+                    let index = tid
+                        + (num_cores / args.parallelism) * rand::random_range(0..args.parallelism);
+                    core_affinity::set_for_current(cores[index]);
+
+                    let instance = instance.clone();
+                    let workspace = &workspaces[tid];
+                    let value = evaluate(
+                        &temp_dir,
+                        &args.sources,
+                        &metadata,
+                        &instance,
+                        args.repetition,
+                        workspace,
+                    )?;
+                    Ok((value, *i))
+                })
+                .collect();
+
+            for result in chunk {
+                let result = result?;
+                cache.insert(instances[result.1].clone(), result.0);
+                results.push(result);
+            }
         }
 
         let min = results
@@ -338,17 +410,15 @@ fn main() -> anyhow::Result<()> {
         }
 
         for (index, instance) in children.into_iter().enumerate() {
-            instances[holes[index]] = Rc::new(instance);
+            instances[holes[index]] = Arc::new(instance);
         }
     }
 
-    finalize(
-        &args.sources,
-        &metadata,
-        input_ptr,
-        output_ptr,
-        validation_ptr,
-    )?;
+    for workspace in workspaces {
+        finalize(&temp_dir, &args.sources, &metadata, &workspace)?;
+    }
+
+    temp_dir.close()?;
 
     let mut results = Vec::new();
     for (instance, fitness) in cache {
