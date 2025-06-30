@@ -1,8 +1,7 @@
 use autotuner::{
     interner::Interner,
-    mapping::Mapping,
     metadata::Metadata,
-    parameter::{Parameter, Profile, Range},
+    parameter::{Parameter, Profile, Range, mapping::Mapping},
 };
 use fxhash::FxHashMap;
 use inquire::{CustomType, Select, Text, validator::Validation};
@@ -44,9 +43,10 @@ fn main() -> anyhow::Result<()> {
                     }
                     _ => unreachable!(),
                 };
-                let mapping = CustomType::<Mapping<i32>>::new("How to represent this parameter")
+                let mapping = Text::new("How to represent this parameter")
                     .with_help_message("Enter a formulaic form of the parameter (optional)")
-                    .prompt_skippable()?;
+                    .prompt_skippable()?
+                    .map(|x| Mapping::new(x));
 
                 Parameter::Integer { mapping, range }
             }

@@ -1,4 +1,6 @@
-use crate::{interner::Interner, mapping::Mapping};
+pub mod mapping;
+
+use crate::{interner::Interner, parameter::mapping::Mapping};
 use fxhash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, hash::Hash, sync::Arc};
@@ -11,7 +13,7 @@ pub enum Range {
 #[derive(Serialize, Deserialize)]
 pub enum Parameter {
     Integer {
-        mapping: Option<Mapping<i32>>,
+        mapping: Option<Mapping>,
         range: Range,
     },
     Switch,

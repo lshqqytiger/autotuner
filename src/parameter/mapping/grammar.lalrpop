@@ -1,0 +1,24 @@
+use crate::parameter::mapping::ast::Expression;
+use std::{str::FromStr, sync::Arc};
+
+grammar;
+
+pub Expression: Arc<Expression> = {
+    <a:Expression> "+" <b:Factor> => Arc::new(Expression::Add(a, b)),
+    Factor,
+};
+
+Factor: Arc<Expression> = {
+    <a:Factor> "*" <b:Term> => Arc::new(Expression::Mul(a, b)),
+    Term,
+};
+
+Term: Arc<Expression> = {
+    Integer => Arc::new(Expression::Integer(<>)),
+    "x" => Arc::new(Expression::X),
+    "(" <Expression> ")" => <>,
+};
+
+Integer: i32 = {
+    r"[0-9]+" => i32::from_str(<>).unwrap(),
+};
