@@ -1,6 +1,4 @@
-pub mod mapping;
-
-use crate::{interner::Interner, parameter::mapping::Mapping};
+use crate::interner::Interner;
 use fxhash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, hash::Hash, sync::Arc};
@@ -10,12 +8,29 @@ pub enum Range {
     Sequence(i32, i32),
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Mapping(Option<String>);
+
+impl Mapping {
+    fn map<T: ToString>(&self, x: T) -> String {
+        let stringified = x.to_string();
+        if let Some(mapping) = &self.0 {
+            mapping.replace("$x", &stringified)
+        } else {
+            stringified
+        }
+    }
+}
+
+impl From<Option<String>> for Mapping {
+    fn from(value: Option<String>) -> Self {
+        Mapping(value)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub enum Parameter {
-    Integer {
-        mapping: Option<Mapping>,
-        range: Range,
-    },
+    Integer { mapping: Mapping, range: Range },
     Switch,
 }
 
@@ -104,20 +119,6 @@ impl Display for Code {
     }
 }
 
-enum Value {
-    Integer(i32),
-    Switch(bool),
-}
-
-impl Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::Integer(n) => write!(f, "{}", n),
-            Value::Switch(b) => write!(f, "{}", if *b { "true" } else { "false" }),
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct Profile(FxHashMap<Arc<str>, Parameter>);
 
@@ -192,33 +193,21 @@ impl Instance {
         Instance::new(self.profile.clone(), parameters)
     }
 
-    fn parameters(&self) -> impl Iterator<Item = (&Arc<str>, Value)> {
-        self.parameters.iter().map(|(name, code)| match code {
-            Code::Integer(x) => (
-                name,
-                Value::Integer(
-                    if let Parameter::Integer {
-                        mapping: Some(mapping),
-                        range: _,
-                    } = self.profile.get_unchecked(name)
-                    {
-                        mapping.map(*x)
-                    } else {
-                        *x
-                    },
-                ),
-            ),
-            Code::Switch(x) => (name, Value::Switch(*x)),
-        })
-    }
-
     pub fn compiler_arguments(&self) -> Vec<String> {
         let mut arguments = Vec::new();
-        for (name, value) in self.parameters() {
-            match value {
-                Value::Integer(x) => arguments.push(format!("-D{}={}", name, x)),
-                Value::Switch(x) => {
-                    if x {
+        for (name, code) in &self.parameters {
+            match code {
+                Code::Integer(x) => {
+                    if let Parameter::Integer { mapping, range: _ } =
+                        self.profile.get_unchecked(name)
+                    {
+                        arguments.push(format!("-D{}=({})", name, mapping.map(x)));
+                    } else {
+                        unreachable!()
+                    }
+                }
+                Code::Switch(x) => {
+                    if *x {
                         arguments.push(format!("-D{}", name));
                     }
                 }
@@ -247,8 +236,23 @@ impl Display for Instance {
         write!(
             f,
             "{}",
-            self.parameters()
-                .map(|(name, value)| format!("{}={}", name, value))
+            self.parameters
+                .iter()
+                .map(|(name, value)| {
+                    let value = match value {
+                        Code::Integer(x) => {
+                            if let Parameter::Integer { mapping, range: _ } =
+                                self.profile.get_unchecked(name)
+                            {
+                                mapping.map(x)
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        Code::Switch(x) => x.to_string(),
+                    };
+                    format!("{}={}", name, value)
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         )
