@@ -337,7 +337,7 @@ fn main() -> anyhow::Result<()> {
                 .map(|(i, instance)| {
                     let tid = rayon::current_thread_index().unwrap_or(0);
                     let index = tid
-                        + (num_cores / args.parallelism) * rand::random_range(0..args.parallelism);
+                        + args.parallelism * rand::random_range(0..(num_cores / args.parallelism));
                     core_affinity::set_for_current(cores[index]);
 
                     let instance = instance.clone();
