@@ -1,4 +1,4 @@
-use crate::interner::Interner;
+use crate::interner::Intern;
 use fxhash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, hash::Hash, sync::Arc};
@@ -8,7 +8,7 @@ pub enum Range {
     Sequence(i32, i32),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Mapping(Option<String>);
 
 impl Mapping {
@@ -151,13 +151,12 @@ pub struct Instance {
 impl Instance {
     pub fn new(profile: Arc<Profile>, parameters: FxHashMap<Arc<str>, Code>) -> Self {
         Instance {
-            id: Interner::intern(
-                &parameters
-                    .iter()
-                    .map(|(name, code)| format!("{}={}", name, code))
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
+            id: parameters
+                .iter()
+                .map(|(name, code)| format!("{}={}", name, code))
+                .collect::<Vec<_>>()
+                .join(",")
+                .intern(),
             profile,
             parameters,
         }

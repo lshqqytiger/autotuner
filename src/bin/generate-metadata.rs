@@ -1,5 +1,5 @@
 use autotuner::{
-    interner::Interner,
+    interner::Intern,
     metadata::Metadata,
     parameter::{Mapping, Parameter, Profile, Range},
 };
@@ -54,7 +54,7 @@ fn main() -> anyhow::Result<()> {
             "Switch" => Parameter::Switch,
             _ => unreachable!(),
         };
-        profile.insert(Interner::intern(&name), parameter);
+        profile.insert(name.intern(), parameter);
     }
 
     let profile = Profile::new(profile);
