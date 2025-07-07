@@ -45,7 +45,7 @@ struct Arguments {
     initial: usize,
 
     #[argh(option, short = 'n', default = "16")]
-    /// number of instances that will be made at each generation (default: 24)
+    /// number of instances that will be made at each generation (default: 16)
     ngeneration: usize,
 
     #[argh(option, short = 'r', default = "1")]
@@ -303,12 +303,68 @@ fn main() -> anyhow::Result<()> {
         workspaces.push(workspace);
     }
 
+    let mut results: Vec<(f64, usize)> = Vec::with_capacity(args.initial);
     let mut rng = rand::rng();
     for i in 0..args.limit {
+        if !results.is_empty() {
+            let min = results
+                .iter()
+                .filter(|(x, _)| !x.is_infinite())
+                .fold(f64::INFINITY, |a, &b| a.min(b.0));
+            let max = results
+                .iter()
+                .filter(|(x, _)| !x.is_infinite())
+                .fold(f64::NEG_INFINITY, |a, &b| a.max(b.0));
+            println!("min = {}, max = {}", min, max);
+
+            let mut inversed = results.clone();
+            for pair in &mut inversed {
+                if pair.0.is_infinite() {
+                    pair.0 = max;
+                    continue;
+                }
+
+                pair.0 = match args.direction {
+                    Direction::Minimize => pair.0,
+                    Direction::Maximize => max - pair.0,
+                };
+            }
+            inversed.shuffle(&mut rng);
+            let holes = stochastic_universal_sampling(&inversed, args.ngeneration);
+            drop(inversed);
+
+            for result in &mut results {
+                if result.0.is_infinite() {
+                    result.0 = min;
+                    continue;
+                }
+
+                result.0 = match args.direction {
+                    Direction::Minimize => max - result.0,
+                    Direction::Maximize => result.0,
+                };
+            }
+            results.shuffle(&mut rng);
+
+            let mut children = Vec::with_capacity(args.ngeneration);
+            for _ in 0..args.ngeneration {
+                let result = stochastic_universal_sampling(&results, 2);
+                let child = Instance::crossover(&instances[result[0]], &instances[result[1]]);
+                let child = child.mutate();
+                let child = child.sanitize();
+                children.push(child);
+            }
+
+            for (index, instance) in children.into_iter().enumerate() {
+                instances[holes[index]] = Arc::new(instance);
+            }
+
+            results.clear();
+        }
+
         println!("#{}", i + 1);
 
         let len = instances.len();
-        let mut results = Vec::with_capacity(len);
         let mut fresh_instances = Vec::new();
         for index in 0..len {
             if let Some(&fitness) = cache.get(&instances[index]) {
@@ -360,58 +416,6 @@ fn main() -> anyhow::Result<()> {
                 results.push(result);
             }
         }
-
-        let min = results
-            .iter()
-            .filter(|(x, _)| !x.is_infinite())
-            .fold(f64::INFINITY, |a, &b| a.min(b.0));
-        let max = results
-            .iter()
-            .filter(|(x, _)| !x.is_infinite())
-            .fold(f64::NEG_INFINITY, |a, &b| a.max(b.0));
-        println!("min = {}, max = {}", min, max);
-
-        let mut inversed = results.clone();
-        for pair in &mut inversed {
-            if pair.0.is_infinite() {
-                pair.0 = max;
-                continue;
-            }
-
-            pair.0 = match args.direction {
-                Direction::Minimize => pair.0,
-                Direction::Maximize => max - pair.0,
-            };
-        }
-        inversed.shuffle(&mut rng);
-        let holes = stochastic_universal_sampling(&inversed, args.ngeneration);
-        drop(inversed);
-
-        for result in &mut results {
-            if result.0.is_infinite() {
-                result.0 = min;
-                continue;
-            }
-
-            result.0 = match args.direction {
-                Direction::Minimize => max - result.0,
-                Direction::Maximize => result.0,
-            };
-        }
-        results.shuffle(&mut rng);
-
-        let mut children = Vec::with_capacity(args.ngeneration);
-        for _ in 0..args.ngeneration {
-            let result = stochastic_universal_sampling(&results, 2);
-            let child = Instance::crossover(&instances[result[0]], &instances[result[1]]);
-            let child = child.mutate();
-            let child = child.sanitize();
-            children.push(child);
-        }
-
-        for (index, instance) in children.into_iter().enumerate() {
-            instances[holes[index]] = Arc::new(instance);
-        }
     }
 
     for workspace in workspaces {
@@ -419,6 +423,19 @@ fn main() -> anyhow::Result<()> {
     }
 
     temp_dir.close()?;
+
+    results.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let results = results
+        .into_iter()
+        .map(|x| (format!("{}", instances[x.1]), x.0))
+        .collect::<Vec<_>>();
+    drop(instances);
+
+    fs::write(
+        "results.json",
+        serde_json::to_string_pretty(&results).expect("Failed to serialize instances"),
+    )
+    .expect("Failed to write results to file");
 
     let mut results = Vec::new();
     for (instance, fitness) in cache {
