@@ -32,10 +32,11 @@ impl From<Option<String>> for Mapping {
 pub enum Parameter {
     Integer { mapping: Mapping, range: Range },
     Switch,
+    Keyword { options: Vec<String> },
 }
 
 impl Parameter {
-    pub const TYPES: [&str; 2] = ["Integer", "Switch"];
+    pub const TYPES: [&str; 3] = ["Integer", "Switch", "Keyword"];
 
     fn sanitize(&self, code: Code) -> Code {
         match (self, code) {
@@ -65,6 +66,67 @@ impl Parameter {
                 Code::Integer(value)
             }
             Parameter::Switch => Code::Switch(rand::random()),
+            Parameter::Keyword { options } => Code::Keyword(rand::random_range(0..options.len())),
+        }
+    }
+
+    fn crossover(&self, a: &Code, b: &Code) -> Code {
+        match (self, a, b) {
+            (
+                Parameter::Integer {
+                    mapping: _,
+                    range: _,
+                },
+                Code::Integer(a),
+                Code::Integer(b),
+            ) => Code::Integer((*a + *b) / 2),
+            (Parameter::Switch, Code::Switch(a), Code::Switch(b)) => {
+                if *a == *b {
+                    Code::Switch(*a)
+                } else {
+                    Code::Switch(rand::random())
+                }
+            }
+            (Parameter::Keyword { options: _ }, Code::Keyword(a), Code::Keyword(b)) => {
+                if *a == *b {
+                    Code::Keyword(*a)
+                } else {
+                    self.random()
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn mutate(&self, code: &mut Code) {
+        match (self, code) {
+            (
+                Parameter::Integer {
+                    mapping: _,
+                    range: _,
+                },
+                Code::Integer(n),
+            ) => {
+                // variation in -10% ~ +10% of the value
+                let mut range = (*n as f64 * 0.1) as i32;
+                if range == 0 {
+                    range = 1;
+                }
+                *n += rand::random_range(-range..=range);
+            }
+            (Parameter::Switch, Code::Switch(b)) => {
+                // 10% chance to flip the switch
+                if rand::random_ratio(1, 10) {
+                    *b = rand::random();
+                }
+            }
+            (Parameter::Keyword { options }, Code::Keyword(i)) => {
+                // 10% chance to change the keyword
+                if rand::random_ratio(1, 10) {
+                    *i = rand::random_range(0..options.len());
+                }
+            }
+            _ => unreachable!(),
         }
     }
 }
@@ -73,48 +135,15 @@ impl Parameter {
 pub enum Code {
     Integer(i32),
     Switch(bool),
+    Keyword(usize),
 }
 
-impl Code {
-    fn crossover(a: &Code, b: &Code) -> Code {
-        match (a, b) {
-            (Code::Integer(a), Code::Integer(b)) => Code::Integer((*a + *b) / 2),
-            (Code::Switch(a), Code::Switch(b)) => {
-                if *a == *b {
-                    Code::Switch(*a)
-                } else {
-                    Code::Switch(rand::random())
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn mutate(&mut self) {
+impl ToString for Code {
+    fn to_string(&self) -> String {
         match self {
-            Code::Integer(n) => {
-                // variation in -10% ~ +10% of the value
-                let mut range = (*n as f64 * 0.1) as i32;
-                if range == 0 {
-                    range = 1;
-                }
-                *n += rand::random_range(-range..=range);
-            }
-            Code::Switch(b) => {
-                // 10% chance to flip the switch
-                if rand::random_ratio(1, 10) {
-                    *b = rand::random();
-                }
-            }
-        }
-    }
-}
-
-impl Display for Code {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Code::Integer(n) => write!(f, "{}", n),
-            Code::Switch(b) => write!(f, "{}", if *b { "true" } else { "false" }),
+            Code::Integer(n) => format!("{}", n),
+            Code::Switch(b) => format!("{}", if *b { "true" } else { "false" }),
+            Code::Keyword(i) => format!("{}", i),
         }
     }
 }
@@ -153,7 +182,7 @@ impl Instance {
         Instance {
             id: parameters
                 .iter()
-                .map(|(name, code)| format!("{}={}", name, code))
+                .map(|(name, code)| format!("{}={}", name, code.to_string()))
                 .collect::<Vec<_>>()
                 .join(",")
                 .intern(),
@@ -167,7 +196,9 @@ impl Instance {
         for parameter in &a.parameters {
             parameters.insert(
                 parameter.0.clone(),
-                Code::crossover(&a.parameters[parameter.0], &b.parameters[parameter.0]),
+                a.profile
+                    .get_unchecked(parameter.0)
+                    .crossover(&a.parameters[parameter.0], &b.parameters[parameter.0]),
             );
         }
         Instance::new(a.profile.clone(), parameters)
@@ -175,8 +206,8 @@ impl Instance {
 
     pub fn mutate(self) -> Instance {
         let mut parameters = self.parameters.clone();
-        for parameter in parameters.values_mut() {
-            parameter.mutate();
+        for (name, parameter) in &mut parameters {
+            self.profile.get_unchecked(&name).mutate(parameter);
         }
         Instance::new(self.profile.clone(), parameters)
     }
@@ -208,6 +239,13 @@ impl Instance {
                 Code::Switch(x) => {
                     if *x {
                         arguments.push(format!("-D{}", name));
+                    }
+                }
+                Code::Keyword(i) => {
+                    if let Parameter::Keyword { options } = self.profile.get_unchecked(name) {
+                        arguments.push(format!("-D{}={}", name, options[*i]));
+                    } else {
+                        unreachable!()
                     }
                 }
             }
@@ -249,6 +287,14 @@ impl Display for Instance {
                             }
                         }
                         Code::Switch(x) => x.to_string(),
+                        Code::Keyword(i) => {
+                            if let Parameter::Keyword { options } = self.profile.get_unchecked(name)
+                            {
+                                options[*i].clone()
+                            } else {
+                                unreachable!()
+                            }
+                        }
                     };
                     format!("{}={}", name, value)
                 })

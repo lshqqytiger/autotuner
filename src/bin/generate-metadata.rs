@@ -52,6 +52,25 @@ fn main() -> anyhow::Result<()> {
                 Parameter::Integer { mapping, range }
             }
             "Switch" => Parameter::Switch,
+            "Keyword" => {
+                let mut options = Vec::new();
+                loop {
+                    if let Some(option) = Text::new("Keyword option")
+                        .with_help_message(
+                            "Enter an option for the keyword parameter (press ESC to finish)",
+                        )
+                        .prompt_skippable()?
+                    {
+                        if option.is_empty() {
+                            break;
+                        }
+                        options.push(option);
+                        continue;
+                    }
+                    break;
+                }
+                Parameter::Keyword { options }
+            }
             _ => unreachable!(),
         };
         profile.insert(name.intern(), parameter);

@@ -9,7 +9,7 @@ lazy_static! {
 struct Interner(FxHashSet<Arc<str>>);
 
 impl Interner {
-    fn _intern(&mut self, raw: &str) -> Arc<str> {
+    fn intern(&mut self, raw: &str) -> Arc<str> {
         if let Some(interned) = self.0.get(raw) {
             interned.clone()
         } else {
@@ -27,6 +27,6 @@ pub trait Intern {
 impl Intern for String {
     fn intern(&self) -> Arc<str> {
         let interner = &mut *INTERNER.lock().unwrap();
-        interner._intern(self)
+        interner.intern(self)
     }
 }
