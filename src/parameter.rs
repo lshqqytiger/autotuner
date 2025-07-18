@@ -38,25 +38,6 @@ pub enum Parameter {
 impl Parameter {
     pub const TYPES: [&str; 3] = ["Integer", "Switch", "Keyword"];
 
-    fn sanitize(&self, code: Code) -> Code {
-        match (self, code) {
-            (Parameter::Integer { mapping: _, range }, Code::Integer(n)) => {
-                #[allow(irrefutable_let_patterns)]
-                if let Range::Sequence(start, end) = range {
-                    if n < *start {
-                        return Code::Integer(*start);
-                    }
-                    if n > *end {
-                        return Code::Integer(*end);
-                    }
-                }
-                Code::Integer(n)
-            }
-            (Parameter::Switch, Code::Switch(x)) => Code::Switch(x),
-            _ => unreachable!(),
-        }
-    }
-
     pub fn random(&self) -> Code {
         match self {
             Parameter::Integer { mapping: _, range } => {
@@ -100,19 +81,22 @@ impl Parameter {
 
     fn mutate(&self, code: &mut Code) {
         match (self, code) {
-            (
-                Parameter::Integer {
-                    mapping: _,
-                    range: _,
-                },
-                Code::Integer(n),
-            ) => {
+            (Parameter::Integer { mapping: _, range }, Code::Integer(n)) => {
                 // variation in -10% ~ +10% of the value
-                let mut range = (*n as f64 * 0.1) as i32;
-                if range == 0 {
-                    range = 1;
+                let mut variation = (*n as f64 * 0.1) as i32;
+                if variation == 0 {
+                    variation = 1;
                 }
-                *n += rand::random_range(-range..=range);
+                *n += rand::random_range(-variation..=variation);
+
+                #[allow(irrefutable_let_patterns)]
+                if let Range::Sequence(start, end) = range {
+                    if *n < *start {
+                        *n = *start;
+                    } else if *n > *end {
+                        *n = *end;
+                    }
+                }
             }
             (Parameter::Switch, Code::Switch(b)) => {
                 // 10% chance to flip the switch
@@ -208,17 +192,6 @@ impl Instance {
         let mut parameters = self.parameters.clone();
         for (name, parameter) in &mut parameters {
             self.profile.get_unchecked(&name).mutate(parameter);
-        }
-        Instance::new(self.profile.clone(), parameters)
-    }
-
-    pub fn sanitize(self) -> Instance {
-        let mut parameters = FxHashMap::default();
-        for (name, parameter) in self.parameters {
-            parameters.insert(
-                name.clone(),
-                self.profile.get_unchecked(&name).sanitize(parameter),
-            );
         }
         Instance::new(self.profile.clone(), parameters)
     }

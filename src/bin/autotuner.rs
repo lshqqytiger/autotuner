@@ -351,7 +351,6 @@ fn main() -> anyhow::Result<()> {
                 let result = stochastic_universal_sampling(&results, 2);
                 let child = Instance::crossover(&instances[result[0]], &instances[result[1]]);
                 let child = child.mutate();
-                let child = child.sanitize();
                 children.push(child);
             }
 
