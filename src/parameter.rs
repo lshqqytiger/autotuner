@@ -1,38 +1,47 @@
 use crate::interner::Intern;
 use fxhash::FxHashMap;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Display, hash::Hash, sync::Arc};
+use std::{convert::Infallible, fmt::Display, hash::Hash, str::FromStr, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
 pub enum Range {
     Sequence(i32, i32),
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct Mapping(Option<String>);
+#[derive(Serialize, Deserialize, Clone)]
+pub struct IntegerTransformer(String);
 
-impl Mapping {
-    fn map<T: ToString>(&self, x: T) -> String {
+impl IntegerTransformer {
+    fn apply<T: ToString>(&self, x: T) -> String {
         let stringified = x.to_string();
-        if let Some(mapping) = &self.0 {
-            mapping.replace("$x", &stringified)
-        } else {
-            stringified
-        }
+        self.0.replace("$x", &stringified)
     }
 }
 
-impl From<Option<String>> for Mapping {
-    fn from(value: Option<String>) -> Self {
-        Mapping(value)
+impl FromStr for IntegerTransformer {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(IntegerTransformer(s.to_string()))
+    }
+}
+
+impl ToString for IntegerTransformer {
+    fn to_string(&self) -> String {
+        self.0.clone()
     }
 }
 
 #[derive(Serialize, Deserialize)]
 pub enum Parameter {
-    Integer { mapping: Mapping, range: Range },
+    Integer {
+        transformer: Option<IntegerTransformer>,
+        range: Range,
+    },
     Switch,
-    Keyword { options: Vec<String> },
+    Keyword {
+        options: Vec<String>,
+    },
 }
 
 impl Parameter {
@@ -40,7 +49,10 @@ impl Parameter {
 
     pub fn random(&self) -> Code {
         match self {
-            Parameter::Integer { mapping: _, range } => {
+            Parameter::Integer {
+                transformer: _,
+                range,
+            } => {
                 let value = match range {
                     Range::Sequence(start, end) => rand::random_range(*start..=*end),
                 };
@@ -55,7 +67,7 @@ impl Parameter {
         match (self, a, b) {
             (
                 Parameter::Integer {
-                    mapping: _,
+                    transformer: _,
                     range: _,
                 },
                 Code::Integer(a),
@@ -81,7 +93,13 @@ impl Parameter {
 
     fn mutate(&self, code: &mut Code) {
         match (self, code) {
-            (Parameter::Integer { mapping: _, range }, Code::Integer(n)) => {
+            (
+                Parameter::Integer {
+                    transformer: _,
+                    range,
+                },
+                Code::Integer(n),
+            ) => {
                 // variation in -10% ~ +10% of the value
                 let mut variation = (*n as f64 * 0.1) as i32;
                 if variation == 0 {
@@ -199,28 +217,37 @@ impl Instance {
     pub fn compiler_arguments(&self) -> Vec<String> {
         let mut arguments = Vec::new();
         for (name, code) in &self.parameters {
-            match code {
-                Code::Integer(x) => {
-                    if let Parameter::Integer { mapping, range: _ } =
-                        self.profile.get_unchecked(name)
-                    {
-                        arguments.push(format!("-D{}=({})", name, mapping.map(x)));
-                    } else {
-                        unreachable!()
-                    }
+            match (self.profile.get_unchecked(name), code) {
+                (
+                    Parameter::Integer {
+                        transformer: Some(transformer),
+                        range: _,
+                    },
+                    Code::Integer(x),
+                ) => {
+                    arguments.push(format!("-D{}=({})", name, transformer.apply(x)));
                 }
-                Code::Switch(x) => {
+                (
+                    Parameter::Integer {
+                        transformer: None,
+                        range: _,
+                    },
+                    Code::Integer(x),
+                ) => {
+                    arguments.push(format!("-D{}={}", name, x));
+                }
+
+                (Parameter::Switch, Code::Switch(x)) => {
                     if *x {
                         arguments.push(format!("-D{}", name));
                     }
                 }
-                Code::Keyword(i) => {
-                    if let Parameter::Keyword { options } = self.profile.get_unchecked(name) {
-                        arguments.push(format!("-D{}={}", name, options[*i]));
-                    } else {
-                        unreachable!()
-                    }
+
+                (Parameter::Keyword { options }, Code::Keyword(i)) => {
+                    arguments.push(format!("-D{}={}", name, options[*i]));
                 }
+
+                _ => unreachable!(),
             }
         }
         arguments
@@ -249,25 +276,27 @@ impl Display for Instance {
             self.parameters
                 .iter()
                 .map(|(name, value)| {
-                    let value = match value {
-                        Code::Integer(x) => {
-                            if let Parameter::Integer { mapping, range: _ } =
-                                self.profile.get_unchecked(name)
-                            {
-                                mapping.map(x)
-                            } else {
-                                unreachable!()
-                            }
-                        }
-                        Code::Switch(x) => x.to_string(),
-                        Code::Keyword(i) => {
-                            if let Parameter::Keyword { options } = self.profile.get_unchecked(name)
-                            {
-                                options[*i].clone()
-                            } else {
-                                unreachable!()
-                            }
-                        }
+                    let value = match (self.profile.get_unchecked(name), value) {
+                        (
+                            Parameter::Integer {
+                                transformer: Some(transformer),
+                                range: _,
+                            },
+                            Code::Integer(x),
+                        ) => transformer.apply(x),
+                        (
+                            Parameter::Integer {
+                                transformer: None,
+                                range: _,
+                            },
+                            Code::Integer(x),
+                        ) => x.to_string(),
+
+                        (Parameter::Switch, Code::Switch(x)) => x.to_string(),
+
+                        (Parameter::Keyword { options }, Code::Keyword(i)) => options[*i].clone(),
+
+                        _ => unreachable!(),
                     };
                     format!("{}={}", name, value)
                 })

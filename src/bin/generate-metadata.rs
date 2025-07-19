@@ -1,7 +1,7 @@
 use autotuner::{
     interner::Intern,
     metadata::Metadata,
-    parameter::{Mapping, Parameter, Profile, Range},
+    parameter::{IntegerTransformer, Parameter, Profile, Range},
 };
 use fxhash::FxHashMap;
 use inquire::{CustomType, Select, Text, validator::Validation};
@@ -43,13 +43,12 @@ fn main() -> anyhow::Result<()> {
                     }
                     _ => unreachable!(),
                 };
-                let mapping = Mapping::from(
-                    Text::new("How to represent this parameter")
+                let transformer =
+                    CustomType::<IntegerTransformer>::new("How to represent this parameter")
                         .with_help_message("Enter a formulaic form of the parameter (optional)")
-                        .prompt_skippable()?,
-                );
+                        .prompt_skippable()?;
 
-                Parameter::Integer { mapping, range }
+                Parameter::Integer { transformer, range }
             }
             "Switch" => Parameter::Switch,
             "Keyword" => {
