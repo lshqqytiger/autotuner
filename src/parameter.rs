@@ -133,7 +133,7 @@ impl Parameter {
     }
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub enum Code {
     Integer(i32),
     Switch(bool),
@@ -251,6 +251,10 @@ impl Instance {
             }
         }
         arguments
+    }
+
+    pub fn get_parameters(&self) -> &FxHashMap<Arc<str>, Code> {
+        &self.parameters
     }
 }
 

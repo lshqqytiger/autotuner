@@ -1,15 +1,26 @@
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
-use autotuner::{metadata::Metadata, parameter::Instance};
+use autotuner::{
+    manually_move::ManuallyMove,
+    metadata::Metadata,
+    parameter::{Code, Instance},
+};
+use fxhash::FxHashMap;
 use hashlru::Cache;
+use libc::{SIGSEGV, SIGTSTP};
 use libloading::{Library, Symbol};
 use rand::seq::SliceRandom;
 use rayon::{ThreadPoolBuilder, prelude::*};
-use signal_hook_registry::{register_unchecked, unregister};
-use std::{ffi, fs, process::Command, ptr, sync::Arc, thread};
+use signal_hook_registry::{register, register_unchecked, unregister};
+use std::{
+    ffi, fs,
+    process::{self, Command},
+    ptr,
+    sync::Arc,
+    thread,
+    time::SystemTime,
+};
 use tempdir::TempDir;
-
-const SIGSEGV: i32 = 11;
 
 enum Direction {
     Minimize,
@@ -63,6 +74,10 @@ struct Arguments {
     #[argh(option, default = "4096")]
     /// cache size in number of entries (default: 4096)
     cache_size: usize,
+
+    #[argh(option, arg_name = "continue")]
+    /// continue from the saved state file
+    continue_: Option<String>,
 
     #[argh(option, default = "\"results.json\".to_string()")]
     /// output file for the last population (default: results.json)
@@ -206,7 +221,7 @@ fn evaluate(
             let result = register_unchecked(SIGSEGV, |_| {
                 // can we do better than this?
                 println!("Segmentation fault occurred during evaluation");
-                std::process::exit(1);
+                process::exit(1);
             });
             let fitness = evaluator(workspace.input_ptr, workspace.output_ptr);
             if let Ok(id) = result {
@@ -296,11 +311,54 @@ fn main() -> anyhow::Result<()> {
 
     let mut cache = Cache::new(args.cache_size);
 
-    let mut instances = Vec::new();
-    for _ in 0..args.initial {
+    let mut instances = ManuallyMove::new(Vec::new());
+    if let Some(file) = args.continue_ {
+        let saved_state: Vec<FxHashMap<Arc<str>, Code>> =
+            serde_json::from_str(&fs::read_to_string(file)?)
+                .expect("Failed to parse saved state file");
+        for parameters in saved_state {
+            instances.push(Arc::new(Instance::new(
+                metadata.profile.clone(),
+                parameters,
+            )));
+        }
+    }
+
+    for _ in instances.len()..args.initial {
         let instance = metadata.profile.random();
         instances.push(Arc::new(instance));
     }
+
+    let sigtstp_handler = unsafe {
+        // instances must not be shared between threads.
+        // It is owned by and bound to the main thread.
+        // Also, the closure will be dropped earlier than instances.
+        let instances = instances.clone();
+        register(SIGTSTP, move || {
+            // Move instances into closure.
+            let instances = instances.mov();
+            let filename = format!(
+                "saved_state.{}",
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            );
+            fs::write(
+                &filename,
+                serde_json::to_string(
+                    &instances
+                        .iter()
+                        .map(|x| x.get_parameters())
+                        .collect::<Vec<_>>(),
+                )
+                .expect("Failed to serialize instances"),
+            )
+            .expect("Failed to write current state to file");
+            println!("Saved current state to {}", filename);
+            process::exit(0);
+        })
+    };
 
     let temp_dir = TempDir::new("autotuner")?;
 
@@ -430,6 +488,11 @@ fn main() -> anyhow::Result<()> {
     }
 
     temp_dir.close()?;
+
+    // The signal handler must be unregistered before instances are dropped.
+    if let Ok(sigtstp_handler) = sigtstp_handler {
+        unregister(sigtstp_handler);
+    }
 
     results.sort_by(|a, b| a.0.total_cmp(&b.0));
     let results = results

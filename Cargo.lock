@@ -69,6 +69,7 @@ dependencies = [
  "hashlru",
  "inquire",
  "lazy_static",
+ "libc",
  "libloading",
  "rand 0.9.1",
  "rayon",
