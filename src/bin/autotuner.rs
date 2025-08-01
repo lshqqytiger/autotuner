@@ -63,6 +63,14 @@ struct Arguments {
     #[argh(option, default = "4096")]
     /// cache size in number of entries (default: 4096)
     cache_size: usize,
+
+    #[argh(option, default = "\"results.json\".to_string()")]
+    /// output file for the last population (default: results.json)
+    output: String,
+
+    #[argh(option, default = "\"results_cache.json\".to_string()")]
+    /// output file for cached instances (default: results_cache.json)
+    output_cache: String,
 }
 
 type Initializer = unsafe extern "C" fn(
@@ -431,7 +439,7 @@ fn main() -> anyhow::Result<()> {
     drop(instances);
 
     fs::write(
-        "results.json",
+        args.output,
         serde_json::to_string_pretty(&results).expect("Failed to serialize instances"),
     )
     .expect("Failed to write results to file");
@@ -443,7 +451,7 @@ fn main() -> anyhow::Result<()> {
     results.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     fs::write(
-        "results_cache.json",
+        args.output_cache,
         serde_json::to_string_pretty(&results).expect("Failed to serialize results"),
     )
     .expect("Failed to write results to file");
