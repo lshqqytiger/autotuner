@@ -7,13 +7,13 @@ use autotuner::{
 };
 use fxhash::FxHashMap;
 use hashlru::Cache;
-use libc::{SIGSEGV, SIGTSTP};
+use libc::{SIGQUIT, SIGSEGV};
 use libloading::{Library, Symbol};
 use rand::seq::SliceRandom;
 use rayon::{ThreadPoolBuilder, prelude::*};
 use signal_hook_registry::{register, register_unchecked, unregister};
 use std::{
-    ffi, fs,
+    ffi, fs, mem,
     process::{self, Command},
     ptr,
     sync::Arc,
@@ -149,7 +149,17 @@ fn compile(
     if let Some(instance) = instance {
         compiler.args(instance.compiler_arguments());
     }
-    let mut compiler = compiler.spawn()?;
+
+    let mut compiler = unsafe {
+        let mut sigset_child = mem::zeroed();
+        libc::sigemptyset(&mut sigset_child);
+        libc::sigaddset(&mut sigset_child, SIGQUIT);
+        let mut sigset_parent = mem::zeroed();
+        libc::sigprocmask(libc::SIG_BLOCK, &sigset_child, &mut sigset_parent);
+        let compiler = compiler.spawn()?;
+        libc::sigprocmask(libc::SIG_SETMASK, &sigset_parent, ptr::null_mut());
+        compiler
+    };
     compiler.wait()?;
 
     let lib = unsafe { Library::new(&path) }?;
@@ -329,12 +339,12 @@ fn main() -> anyhow::Result<()> {
         instances.push(Arc::new(instance));
     }
 
-    let sigtstp_handler = unsafe {
+    let sigquit_handler = unsafe {
         // instances must not be shared between threads.
         // It is owned by and bound to the main thread.
         // Also, the closure will be dropped earlier than instances.
         let instances = instances.clone();
-        register(SIGTSTP, move || {
+        register(SIGQUIT, move || {
             // Move instances into closure.
             let instances = instances.mov();
             let filename = format!(
@@ -491,8 +501,8 @@ fn main() -> anyhow::Result<()> {
     temp_dir.close()?;
 
     // The signal handler must be unregistered before instances are dropped.
-    if let Ok(sigtstp_handler) = sigtstp_handler {
-        unregister(sigtstp_handler);
+    if let Ok(sigquit_handler) = sigquit_handler {
+        unregister(sigquit_handler);
     }
 
     results.sort_by(|a, b| a.0.total_cmp(&b.0));
