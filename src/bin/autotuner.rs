@@ -355,6 +355,7 @@ fn main() -> anyhow::Result<()> {
                 .expect("Failed to serialize instances"),
             )
             .expect("Failed to write current state to file");
+            ManuallyMove::drop(instances);
             println!("Saved current state to {}", filename);
             process::exit(0);
         })
@@ -499,7 +500,7 @@ fn main() -> anyhow::Result<()> {
         .into_iter()
         .map(|x| (format!("{}", instances[x.1]), x.0))
         .collect::<Vec<_>>();
-    drop(instances);
+    ManuallyMove::drop(instances);
 
     fs::write(
         args.output,

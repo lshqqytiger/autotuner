@@ -12,6 +12,10 @@ impl<T: Sized> ManuallyMove<T> {
     pub unsafe fn mov(&self) -> ManuallyMove<T> {
         ManuallyMove(self.0)
     }
+
+    pub fn drop(self) {
+        drop(unsafe { Box::from_raw(self.0) });
+    }
 }
 
 impl<T> Deref for ManuallyMove<T> {
@@ -25,12 +29,6 @@ impl<T> Deref for ManuallyMove<T> {
 impl<T> DerefMut for ManuallyMove<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.0.as_mut() }.unwrap()
-    }
-}
-
-impl<T> Drop for ManuallyMove<T> {
-    fn drop(&mut self) {
-        drop(unsafe { Box::from_raw(self.0) });
     }
 }
 
