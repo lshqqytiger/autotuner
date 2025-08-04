@@ -1,3 +1,5 @@
+mod results;
+
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
 use autotuner::{
@@ -6,11 +8,11 @@ use autotuner::{
     parameter::{Code, Instance},
 };
 use fxhash::FxHashMap;
-use hashlru::Cache;
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::{Library, Symbol};
 use rand::seq::SliceRandom;
 use rayon::{ThreadPoolBuilder, prelude::*};
+use results::Results;
 use signal_hook_registry::{register, register_unchecked, unregister};
 use std::{
     ffi, fs, mem,
@@ -80,12 +82,8 @@ struct Arguments {
     continue_: Option<String>,
 
     #[argh(option, default = "\"results.json\".to_string()")]
-    /// output file for the last population (default: results.json)
+    /// output file (default: results.json)
     output: String,
-
-    #[argh(option, default = "\"results_cache.json\".to_string()")]
-    /// output file for cached instances (default: results_cache.json)
-    output_cache: String,
 }
 
 type Initializer = unsafe extern "C" fn(
@@ -319,7 +317,7 @@ fn main() -> anyhow::Result<()> {
     )
     .expect("Failed to parse kernel metadata");
 
-    let mut cache = Cache::new(args.cache_size);
+    let mut results = Results::new(args.cache_size);
 
     let mut instances = ManuallyMove::new(Vec::new());
     if let Some(file) = args.continue_ {
@@ -380,21 +378,21 @@ fn main() -> anyhow::Result<()> {
         workspaces.push(workspace);
     }
 
-    let mut results: Vec<(f64, usize)> = Vec::with_capacity(args.initial);
+    let mut evaluation_results: Vec<(f64, usize)> = Vec::with_capacity(args.initial);
     let mut rng = rand::rng();
     for i in 0..args.limit {
-        if !results.is_empty() {
-            let min = results
+        if !evaluation_results.is_empty() {
+            let min = evaluation_results
                 .iter()
                 .filter(|(x, _)| !x.is_infinite())
                 .fold(f64::INFINITY, |a, &b| a.min(b.0));
-            let max = results
+            let max = evaluation_results
                 .iter()
                 .filter(|(x, _)| !x.is_infinite())
                 .fold(f64::NEG_INFINITY, |a, &b| a.max(b.0));
             println!("min = {}, max = {}", min, max);
 
-            let mut inversed = results.clone();
+            let mut inversed = evaluation_results.clone();
             for pair in &mut inversed {
                 if pair.0.is_infinite() {
                     pair.0 = max;
@@ -410,7 +408,7 @@ fn main() -> anyhow::Result<()> {
             let holes = stochastic_universal_sampling(&inversed, args.ngeneration);
             drop(inversed);
 
-            for result in &mut results {
+            for result in &mut evaluation_results {
                 if result.0.is_infinite() {
                     result.0 = min;
                     continue;
@@ -421,11 +419,11 @@ fn main() -> anyhow::Result<()> {
                     Direction::Maximize => result.0,
                 };
             }
-            results.shuffle(&mut rng);
+            evaluation_results.shuffle(&mut rng);
 
             let mut children = Vec::with_capacity(args.ngeneration);
             for _ in 0..args.ngeneration {
-                let result = stochastic_universal_sampling(&results, 2);
+                let result = stochastic_universal_sampling(&evaluation_results, 2);
                 let child = Instance::crossover(&instances[result[0]], &instances[result[1]]);
                 let child = child.mutate();
                 children.push(child);
@@ -435,7 +433,7 @@ fn main() -> anyhow::Result<()> {
                 instances[holes[index]] = Arc::new(instance);
             }
 
-            results.clear();
+            evaluation_results.clear();
         }
 
         println!("#{}", i + 1);
@@ -443,8 +441,8 @@ fn main() -> anyhow::Result<()> {
         let len = instances.len();
         let mut fresh_instances = Vec::new();
         for index in 0..len {
-            if let Some(&fitness) = cache.get(&instances[index]) {
-                results.push((fitness, index));
+            if let Some(&fitness) = results.get(&instances[index]) {
+                evaluation_results.push((fitness, index));
                 continue;
             }
             fresh_instances.push((index, instances[index].clone()));
@@ -488,8 +486,8 @@ fn main() -> anyhow::Result<()> {
 
             for result in chunk {
                 let result = result?;
-                cache.insert(instances[result.1].clone(), result.0);
-                results.push(result);
+                results.insert(instances[result.1].clone(), result.0);
+                evaluation_results.push(result);
             }
         }
     }
@@ -505,28 +503,18 @@ fn main() -> anyhow::Result<()> {
         unregister(sigquit_handler);
     }
 
-    results.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let results = results
-        .into_iter()
-        .map(|x| (format!("{}", instances[x.1]), x.0))
-        .collect::<Vec<_>>();
+    drop(evaluation_results);
     ManuallyMove::drop(instances);
+
+    let mut instances = Vec::new();
+    for (instance, fitness) in results {
+        instances.push((format!("{}", instance), fitness));
+    }
+    instances.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     fs::write(
         args.output,
-        serde_json::to_string_pretty(&results).expect("Failed to serialize instances"),
-    )
-    .expect("Failed to write results to file");
-
-    let mut results = Vec::new();
-    for (instance, fitness) in cache {
-        results.push((format!("{}", instance), fitness));
-    }
-    results.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-    fs::write(
-        args.output_cache,
-        serde_json::to_string_pretty(&results).expect("Failed to serialize results"),
+        serde_json::to_string_pretty(&instances).expect("Failed to serialize instances"),
     )
     .expect("Failed to write results to file");
 
