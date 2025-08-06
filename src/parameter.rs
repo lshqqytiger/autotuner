@@ -176,7 +176,7 @@ impl Profile {
 pub struct Instance {
     id: Arc<str>,
     profile: Arc<Profile>,
-    parameters: FxHashMap<Arc<str>, Code>,
+    pub parameters: FxHashMap<Arc<str>, Code>,
 }
 
 impl Instance {
@@ -251,10 +251,6 @@ impl Instance {
             }
         }
         arguments
-    }
-
-    pub fn get_parameters(&self) -> &FxHashMap<Arc<str>, Code> {
-        &self.parameters
     }
 }
 

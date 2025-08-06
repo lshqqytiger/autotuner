@@ -12,6 +12,10 @@ impl Result {
     fn into_tuple(self) -> (Arc<Instance>, f64) {
         (self.0, self.1)
     }
+
+    fn into_tuple_ref(&self) -> (&Arc<Instance>, &f64) {
+        (&self.0, &self.1)
+    }
 }
 
 impl PartialEq for Result {
@@ -65,6 +69,13 @@ impl Results {
             }
         }
     }
+
+    pub fn iter(&self) -> Iter {
+        match self {
+            Results::Cache(cache) => Iter::Cache(cache.iter()),
+            Results::Trace(trace) => Iter::Trace(trace.iter()),
+        }
+    }
 }
 
 impl IntoIterator for Results {
@@ -91,6 +102,22 @@ impl Iterator for IntoIter {
         match self {
             IntoIter::Cache(iter) => iter.next(),
             IntoIter::Trace(iter) => iter.next().map(Result::into_tuple),
+        }
+    }
+}
+
+pub enum Iter<'iter> {
+    Cache(hashlru::Iter<'iter, Arc<Instance>, f64>),
+    Trace(binary_heap::Iter<'iter, Result>),
+}
+
+impl<'iter> Iterator for Iter<'iter> {
+    type Item = (&'iter Arc<Instance>, &'iter f64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Iter::Cache(iter) => iter.next(),
+            Iter::Trace(iter) => iter.next().map(Result::into_tuple_ref),
         }
     }
 }

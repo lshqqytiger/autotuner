@@ -1,5 +1,8 @@
 mod results;
+mod runner;
+mod signal;
 
+use crate::runner::Runner;
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
 use autotuner::{
@@ -8,21 +11,13 @@ use autotuner::{
     parameter::{Code, Instance},
 };
 use fxhash::FxHashMap;
-use libc::{SIGQUIT, SIGSEGV};
-use libloading::{Library, Symbol};
+use libc::SIGQUIT;
 use rand::seq::SliceRandom;
 use rayon::{ThreadPoolBuilder, prelude::*};
 use results::Results;
-use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{
-    ffi, fs, mem,
-    process::{self, Command},
-    ptr,
-    sync::Arc,
-    thread,
-    time::SystemTime,
-};
-use tempdir::TempDir;
+use serde::{Deserialize, Serialize};
+use signal_hook_registry::{register, unregister};
+use std::{fs, process, sync::Arc, time::SystemTime};
 
 enum Direction {
     Minimize,
@@ -86,173 +81,35 @@ struct Arguments {
     output: String,
 }
 
-type Initializer = unsafe extern "C" fn(
-    arg_in: *mut *mut ffi::c_void,
-    arg_out: *mut *mut ffi::c_void,
-    arg_val: *mut *mut ffi::c_void,
-);
-type Finalizer = unsafe extern "C" fn(
-    arg_in: *mut ffi::c_void,
-    arg_out: *mut ffi::c_void,
-    arg_val: *mut ffi::c_void,
-);
-type Evaluator = unsafe extern "C" fn(arg_in: *mut ffi::c_void, arg_out: *mut ffi::c_void) -> f64;
-type Validator =
-    unsafe extern "C" fn(arg_val: *const ffi::c_void, arg_out: *const ffi::c_void) -> bool;
-
-unsafe impl Sync for Workspace {}
-
-// TODO: input_ptr and validation_ptr can be shared between threads
-struct Workspace {
-    input_ptr: *mut ffi::c_void, // const after initialization
-    output_ptr: *mut ffi::c_void,
-    validation_ptr: Option<*mut ffi::c_void>, // const after initialization
+#[derive(Serialize, Deserialize)]
+struct SavedState {
+    instances: Vec<FxHashMap<Arc<str>, Code>>,
+    results: Vec<(FxHashMap<Arc<str>, Code>, f64)>,
 }
 
-impl Workspace {
-    fn new(validation: bool) -> Self {
-        Workspace {
-            input_ptr: ptr::null_mut(),
-            output_ptr: ptr::null_mut(),
-            validation_ptr: if validation {
-                Some(ptr::null_mut())
-            } else {
-                None
-            },
-        }
+impl SavedState {
+    fn new(instances: &Vec<Arc<Instance>>, results: &Results) -> Self {
+        let instances = instances
+            .iter()
+            .map(|x| x.parameters.clone())
+            .collect::<Vec<_>>();
+        let results = results
+            .iter()
+            .filter_map(|(instance, fitness)| {
+                if fitness.is_infinite() {
+                    None
+                } else {
+                    Some((instance.parameters.clone(), *fitness))
+                }
+            })
+            .collect::<Vec<_>>();
+        SavedState { instances, results }
     }
 }
 
 #[inline]
 fn round_up(a: usize, b: usize) -> usize {
     (a + b - 1) / b
-}
-
-fn compile(
-    temp_dir: &TempDir,
-    sources: &[String],
-    metadata: &Metadata,
-    instance: Option<&Instance>,
-) -> anyhow::Result<Library> {
-    let path = temp_dir
-        .path()
-        .join(thread::current().name().unwrap_or("temp"));
-    let mut compiler = Command::new(&metadata.compiler);
-    let compiler = compiler
-        .arg("-shared")
-        .arg("-o")
-        .arg(&path)
-        .args(sources)
-        .args(&metadata.compiler_arguments);
-    if let Some(instance) = instance {
-        compiler.args(instance.compiler_arguments());
-    }
-
-    let mut compiler = unsafe {
-        let mut sigset_child = mem::zeroed();
-        libc::sigemptyset(&mut sigset_child);
-        libc::sigaddset(&mut sigset_child, SIGQUIT);
-        let mut sigset_parent = mem::zeroed();
-        libc::sigprocmask(libc::SIG_BLOCK, &sigset_child, &mut sigset_parent);
-        let compiler = compiler.spawn()?;
-        libc::sigprocmask(libc::SIG_SETMASK, &sigset_parent, ptr::null_mut());
-        compiler
-    };
-    compiler.wait()?;
-
-    let lib = unsafe { Library::new(&path) }?;
-    Ok(lib)
-}
-
-fn initialize(
-    temp_dir: &TempDir,
-    sources: &[String],
-    metadata: &Metadata,
-    workspace: &mut Workspace,
-) -> anyhow::Result<()> {
-    let lib = compile(temp_dir, sources, metadata, None)?;
-    let initializer: Symbol<Initializer> = unsafe { lib.get(metadata.initializer.as_bytes()) }?;
-    unsafe {
-        initializer(
-            &mut workspace.input_ptr,
-            &mut workspace.output_ptr,
-            if let Some(ptr) = workspace.validation_ptr.as_mut() {
-                ptr
-            } else {
-                ptr::null_mut()
-            },
-        );
-    }
-    Ok(())
-}
-
-fn finalize(
-    temp_dir: &TempDir,
-    sources: &[String],
-    metadata: &Metadata,
-    workspace: &Workspace,
-) -> anyhow::Result<()> {
-    if let None = metadata.finalizer {
-        return Ok(());
-    }
-
-    let lib = compile(temp_dir, sources, metadata, None)?;
-    let finalizer: Symbol<Finalizer> =
-        unsafe { lib.get(metadata.finalizer.as_ref().unwrap().as_bytes()) }?;
-    unsafe {
-        finalizer(
-            workspace.input_ptr,
-            workspace.output_ptr,
-            if let Some(ptr) = workspace.validation_ptr {
-                ptr
-            } else {
-                ptr::null_mut()
-            },
-        );
-    }
-    Ok(())
-}
-
-fn evaluate(
-    temp_dir: &TempDir,
-    sources: &[String],
-    metadata: &Metadata,
-    instance: &Instance,
-    repetition: usize,
-    workspace: &Workspace,
-) -> anyhow::Result<f64> {
-    let lib = compile(temp_dir, sources, metadata, Some(instance))?;
-    let evaluator: Symbol<Evaluator> = unsafe { lib.get(metadata.evaluator.as_bytes()) }?;
-    let mut fitnesses = Vec::with_capacity(repetition);
-    for _ in 0..repetition {
-        let fitness = unsafe {
-            let result = register_unchecked(SIGSEGV, |_| {
-                // can we do better than this?
-                println!("Segmentation fault occurred during evaluation");
-                process::exit(1);
-            });
-            let fitness = evaluator(workspace.input_ptr, workspace.output_ptr);
-            if let Ok(id) = result {
-                unregister(id);
-            }
-            fitness
-        };
-        if fitness.is_nan() {
-            return Err(anyhow!("NaN value encountered"));
-        }
-        fitnesses.push(fitness);
-    }
-    fitnesses.sort_by(|a, b| a.total_cmp(b));
-
-    if let Some(block) = workspace.validation_ptr {
-        let validator: Symbol<Validator> =
-            unsafe { lib.get(metadata.validator.as_ref().unwrap().as_bytes()) }?;
-        if !unsafe { validator(block, workspace.output_ptr) } {
-            return Ok(f64::INFINITY);
-        }
-    }
-
-    Ok(fitnesses[fitnesses.len() / 2])
 }
 
 fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usize> {
@@ -307,6 +164,9 @@ fn main() -> anyhow::Result<()> {
     ThreadPoolBuilder::new()
         .num_threads(args.parallelism)
         .thread_name(|x| format!("t{}", x))
+        .start_handler(|_| unsafe {
+            signal::block(SIGQUIT);
+        })
         .build_global()?;
 
     let cores = core_affinity::get_core_ids().unwrap();
@@ -317,18 +177,23 @@ fn main() -> anyhow::Result<()> {
     )
     .expect("Failed to parse kernel metadata");
 
-    let mut results = Results::new(args.cache_size);
+    let saved_state = args.continue_.map(|filename| {
+        let content = fs::read_to_string(filename).expect("Failed to read saved state file");
+        serde_json::from_str::<SavedState>(&content).expect("Failed to parse saved state file")
+    });
 
     let mut instances = ManuallyMove::new(Vec::new());
-    if let Some(file) = args.continue_ {
-        let saved_state: Vec<FxHashMap<Arc<str>, Code>> =
-            serde_json::from_str(&fs::read_to_string(file)?)
-                .expect("Failed to parse saved state file");
-        for parameters in saved_state {
+    let mut results = ManuallyMove::new(Results::new(args.cache_size));
+    if let Some(saved_state) = saved_state {
+        for parameters in saved_state.instances {
             instances.push(Arc::new(Instance::new(
                 metadata.profile.clone(),
                 parameters,
             )));
+        }
+        for (parameters, fitness) in saved_state.results {
+            let instance = Arc::new(Instance::new(metadata.profile.clone(), parameters));
+            results.insert(instance, fitness);
         }
     }
 
@@ -337,46 +202,41 @@ fn main() -> anyhow::Result<()> {
         instances.push(Arc::new(instance));
     }
 
+    let runner = ManuallyMove::new(Runner::new(args.sources, metadata, args.parallelism)?);
+
     let sigquit_handler = unsafe {
-        // instances must not be shared between threads.
-        // It is owned by and bound to the main thread.
-        // Also, the closure will be dropped earlier than instances.
+        // Thread Unsafe
         let instances = instances.clone();
+        let results = results.clone();
+        let runner = runner.clone();
         register(SIGQUIT, move || {
-            // Move instances into closure.
+            // Stop the autotuner and save current state.
+            // Move states and runner from main() into the closure.
             let instances = instances.mov();
+            let results = results.mov();
+            let runner = runner.mov();
+            ManuallyMove::drop(runner);
+
             let filename = format!(
                 "saved_state.{}",
                 SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs()
             );
+            let saved_state = SavedState::new(&instances, &results);
+            ManuallyMove::drop(instances);
+            ManuallyMove::drop(results);
             fs::write(
                 &filename,
-                serde_json::to_string(
-                    &instances
-                        .iter()
-                        .map(|x| x.get_parameters())
-                        .collect::<Vec<_>>(),
-                )
-                .expect("Failed to serialize instances"),
+                serde_json::to_string(&saved_state).expect("Failed to serialize instances"),
             )
             .expect("Failed to write current state to file");
-            ManuallyMove::drop(instances);
+
             println!("Saved current state to {}", filename);
             process::exit(0);
         })
     };
-
-    let temp_dir = TempDir::new("autotuner")?;
-
-    let mut workspaces = Vec::with_capacity(args.parallelism);
-    for _ in 0..args.parallelism {
-        let mut workspace = Workspace::new(metadata.validator.is_some());
-        initialize(&temp_dir, &args.sources, &metadata, &mut workspace)?;
-        workspaces.push(workspace);
-    }
 
     let mut evaluation_results: Vec<(f64, usize)> = Vec::with_capacity(args.initial);
     let mut rng = rand::rng();
@@ -462,54 +322,47 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            let chunk: Vec<anyhow::Result<(f64, usize)>> = fresh_instances
-                .par_iter()
-                .map(|(i, instance)| {
-                    let tid = rayon::current_thread_index().unwrap_or(0);
-                    let index = tid
-                        + args.parallelism * rand::random_range(0..(num_cores / args.parallelism));
-                    core_affinity::set_for_current(cores[index]);
+            with_signal_mask!(SIGQUIT, {
+                let chunk: Vec<anyhow::Result<(f64, usize)>> = fresh_instances
+                    .par_iter()
+                    .map(|(i, instance)| {
+                        let tid = rayon::current_thread_index().unwrap_or(0);
+                        let index = tid
+                            + args.parallelism
+                                * rand::random_range(0..(num_cores / args.parallelism));
+                        core_affinity::set_for_current(cores[index]);
 
-                    let instance = instance.clone();
-                    let workspace = &workspaces[tid];
-                    let value = evaluate(
-                        &temp_dir,
-                        &args.sources,
-                        &metadata,
-                        &instance,
-                        args.repetition,
-                        workspace,
-                    )?;
-                    Ok((value, *i))
-                })
-                .collect();
+                        let instance = instance.clone();
+                        let value = runner.evaluate(&instance, args.repetition)?;
+                        Ok((value, *i))
+                    })
+                    .collect();
+                // FIXME: somehow SIGQUIT is delivered to the main thread even though it is blocked
 
-            for result in chunk {
-                let result = result?;
-                results.insert(instances[result.1].clone(), result.0);
-                evaluation_results.push(result);
-            }
+                for result in chunk {
+                    let result = result?;
+                    results.insert(instances[result.1].clone(), result.0);
+                    evaluation_results.push(result);
+                }
+            });
         }
     }
 
-    for workspace in workspaces {
-        finalize(&temp_dir, &args.sources, &metadata, &workspace)?;
-    }
-
-    temp_dir.close()?;
-
-    // The signal handler must be unregistered before instances are dropped.
+    // The signal handler must be unregistered early enough.
     if let Ok(sigquit_handler) = sigquit_handler {
         unregister(sigquit_handler);
     }
 
+    ManuallyMove::drop(runner);
+
     drop(evaluation_results);
     ManuallyMove::drop(instances);
 
-    let mut instances = Vec::new();
-    for (instance, fitness) in results {
-        instances.push((format!("{}", instance), fitness));
-    }
+    let mut instances = results
+        .iter()
+        .map(|(instance, fitness)| (format!("{}", instance), *fitness))
+        .collect::<Vec<_>>();
+    ManuallyMove::drop(results);
     instances.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     fs::write(

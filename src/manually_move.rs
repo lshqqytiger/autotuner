@@ -1,6 +1,5 @@
 use std::ops::{Deref, DerefMut};
 
-#[derive(Clone)]
 #[repr(transparent)]
 pub struct ManuallyMove<T: Sized>(*mut T);
 
@@ -15,6 +14,12 @@ impl<T: Sized> ManuallyMove<T> {
 
     pub fn drop(self) {
         drop(unsafe { Box::from_raw(self.0) });
+    }
+}
+
+impl<T> Clone for ManuallyMove<T> {
+    fn clone(&self) -> Self {
+        ManuallyMove(self.0)
     }
 }
 
