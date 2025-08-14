@@ -1,23 +1,18 @@
 mod results;
 mod runner;
-mod signal;
+mod saved_state;
+mod utils;
 
-use crate::runner::Runner;
+use crate::{runner::Runner, saved_state::SavedState};
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
-use autotuner::{
-    manually_move::ManuallyMove,
-    metadata::Metadata,
-    parameter::{Code, Instance},
-};
-use fxhash::FxHashMap;
+use autotuner::{manually_move::ManuallyMove, metadata::Metadata, parameter::Instance};
 use libc::SIGQUIT;
 use rand::seq::SliceRandom;
 use rayon::{ThreadPoolBuilder, prelude::*};
 use results::Results;
-use serde::{Deserialize, Serialize};
 use signal_hook_registry::{register, unregister};
-use std::{fs, process, sync::Arc, time::SystemTime};
+use std::{fs, sync::Arc, time::SystemTime};
 
 enum Direction {
     Minimize,
@@ -81,37 +76,6 @@ struct Arguments {
     output: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct SavedState {
-    instances: Vec<FxHashMap<Arc<str>, Code>>,
-    results: Vec<(FxHashMap<Arc<str>, Code>, f64)>,
-}
-
-impl SavedState {
-    fn new(instances: &Vec<Arc<Instance>>, results: &Results) -> Self {
-        let instances = instances
-            .iter()
-            .map(|x| x.parameters.clone())
-            .collect::<Vec<_>>();
-        let results = results
-            .iter()
-            .filter_map(|(instance, fitness)| {
-                if fitness.is_infinite() {
-                    None
-                } else {
-                    Some((instance.parameters.clone(), *fitness))
-                }
-            })
-            .collect::<Vec<_>>();
-        SavedState { instances, results }
-    }
-}
-
-#[inline]
-fn round_up(a: usize, b: usize) -> usize {
-    (a + b - 1) / b
-}
-
 fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usize> {
     assert!(!roulette.is_empty());
     assert_ne!(n, 0);
@@ -165,7 +129,7 @@ fn main() -> anyhow::Result<()> {
         .num_threads(args.parallelism)
         .thread_name(|x| format!("t{}", x))
         .start_handler(|_| unsafe {
-            signal::block(SIGQUIT);
+            utils::block(SIGQUIT);
         })
         .build_global()?;
 
@@ -182,9 +146,11 @@ fn main() -> anyhow::Result<()> {
         serde_json::from_str::<SavedState>(&content).expect("Failed to parse saved state file")
     });
 
+    let mut i = 0;
     let mut instances = ManuallyMove::new(Vec::new());
     let mut results = ManuallyMove::new(Results::new(args.cache_size));
     if let Some(saved_state) = saved_state {
+        i = saved_state.i;
         for parameters in saved_state.instances {
             instances.push(Arc::new(Instance::new(
                 metadata.profile.clone(),
@@ -204,43 +170,18 @@ fn main() -> anyhow::Result<()> {
 
     let runner = ManuallyMove::new(Runner::new(args.sources, metadata, args.parallelism)?);
 
+    let is_canceled = ManuallyMove::new(false);
     let sigquit_handler = unsafe {
-        // Thread Unsafe
-        let instances = instances.clone();
-        let results = results.clone();
-        let runner = runner.clone();
+        let is_canceled = is_canceled.clone();
         register(SIGQUIT, move || {
-            // Stop the autotuner and save current state.
-            // Move states and runner from main() into the closure.
-            let instances = instances.mov();
-            let results = results.mov();
-            let runner = runner.mov();
-            ManuallyMove::drop(runner);
-
-            let filename = format!(
-                "saved_state.{}",
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            );
-            let saved_state = SavedState::new(&instances, &results);
-            ManuallyMove::drop(instances);
-            ManuallyMove::drop(results);
-            fs::write(
-                &filename,
-                serde_json::to_string(&saved_state).expect("Failed to serialize instances"),
-            )
-            .expect("Failed to write current state to file");
-
-            println!("Saved current state to {}", filename);
-            process::exit(0);
+            let mut is_canceled = is_canceled.mov();
+            *is_canceled = true;
         })
     };
 
     let mut evaluation_results: Vec<(f64, usize)> = Vec::with_capacity(args.initial);
     let mut rng = rand::rng();
-    for i in 0..args.limit {
+    while i < args.limit {
         if !evaluation_results.is_empty() {
             let min = evaluation_results
                 .iter()
@@ -309,7 +250,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         let len = fresh_instances.len();
-        for i in 0..round_up(len, args.parallelism) {
+        for i in 0..utils::round_up(len, args.parallelism) {
             let fresh_instances =
                 &fresh_instances[(i * args.parallelism)..((i + 1) * args.parallelism).min(len)];
 
@@ -322,30 +263,36 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            with_signal_mask!(SIGQUIT, {
-                let chunk: Vec<anyhow::Result<(f64, usize)>> = fresh_instances
-                    .par_iter()
-                    .map(|(i, instance)| {
-                        let tid = rayon::current_thread_index().unwrap_or(0);
-                        let index = tid
-                            + args.parallelism
-                                * rand::random_range(0..(num_cores / args.parallelism));
-                        core_affinity::set_for_current(cores[index]);
+            let chunk: Vec<anyhow::Result<(f64, usize)>> = fresh_instances
+                .par_iter()
+                .map(|(i, instance)| {
+                    let tid = rayon::current_thread_index().unwrap_or(0);
+                    let index = tid
+                        + args.parallelism * rand::random_range(0..(num_cores / args.parallelism));
+                    core_affinity::set_for_current(cores[index]);
 
-                        let instance = instance.clone();
-                        let value = runner.evaluate(&instance, args.repetition)?;
-                        Ok((value, *i))
-                    })
-                    .collect();
-                // FIXME: somehow SIGQUIT is delivered to the main thread even though it is blocked
+                    let instance = instance.clone();
+                    let value = runner.evaluate(&instance, args.repetition)?;
+                    Ok((value, *i))
+                })
+                .collect();
 
-                for result in chunk {
-                    let result = result?;
-                    results.insert(instances[result.1].clone(), result.0);
-                    evaluation_results.push(result);
-                }
-            });
+            for result in chunk {
+                let result = result?;
+                results.insert(instances[result.1].clone(), result.0);
+                evaluation_results.push(result);
+            }
+
+            if *is_canceled {
+                break;
+            }
         }
+
+        if *is_canceled {
+            break;
+        }
+
+        i += 1;
     }
 
     // The signal handler must be unregistered early enough.
@@ -353,23 +300,41 @@ fn main() -> anyhow::Result<()> {
         unregister(sigquit_handler);
     }
 
-    ManuallyMove::drop(runner);
+    drop(runner);
 
-    drop(evaluation_results);
-    ManuallyMove::drop(instances);
+    if *is_canceled {
+        let filename = format!(
+            "saved_state.{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        );
+        let saved_state = SavedState::new(i, &instances, &results);
+        fs::write(
+            &filename,
+            serde_json::to_string(&saved_state).expect("Failed to serialize instances"),
+        )
+        .expect("Failed to write current state to file");
 
-    let mut instances = results
-        .iter()
-        .map(|(instance, fitness)| (format!("{}", instance), *fitness))
-        .collect::<Vec<_>>();
-    ManuallyMove::drop(results);
-    instances.sort_by(|a, b| a.1.total_cmp(&b.1));
+        println!("Saved current state to {}", filename);
+    } else {
+        drop(evaluation_results);
+        drop(instances);
 
-    fs::write(
-        args.output,
-        serde_json::to_string_pretty(&instances).expect("Failed to serialize instances"),
-    )
-    .expect("Failed to write results to file");
+        let mut instances = results
+            .iter()
+            .map(|(instance, fitness)| (format!("{}", instance), *fitness))
+            .collect::<Vec<_>>();
+        drop(results);
+        instances.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+        fs::write(
+            args.output,
+            serde_json::to_string_pretty(&instances).expect("Failed to serialize instances"),
+        )
+        .expect("Failed to write results to file");
+    }
 
     Ok(())
 }

@@ -5,7 +5,7 @@ use libloading::{Library, Symbol};
 use signal_hook_registry::{register_unchecked, unregister};
 use std::{
     ffi::{self, OsStr},
-    process::{self, Command, Stdio},
+    process::{self, Command},
     ptr, thread,
 };
 use tempdir::TempDir;
@@ -73,12 +73,7 @@ fn compile<S: AsRef<OsStr>>(
         .path()
         .join(thread::current().name().unwrap_or("temp"));
     let mut compiler = Command::new(compiler);
-    let compiler = compiler
-        .stderr(Stdio::null())
-        .arg("-shared")
-        .arg("-o")
-        .arg(&path)
-        .args(arguments);
+    let compiler = compiler.arg("-shared").arg("-o").arg(&path).args(arguments);
 
     let mut compiler = compiler.spawn()?;
     compiler.wait()?;
@@ -87,7 +82,7 @@ fn compile<S: AsRef<OsStr>>(
     Ok(lib)
 }
 
-pub struct Runner {
+pub(crate) struct Runner {
     sources: Vec<String>,
     metadata: Metadata,
     temp_dir: TempDir,
@@ -96,7 +91,7 @@ pub struct Runner {
 }
 
 impl Runner {
-    pub fn new(
+    pub(crate) fn new(
         sources: Vec<String>,
         metadata: Metadata,
         parallelism: usize,
@@ -122,7 +117,7 @@ impl Runner {
         Ok(runner)
     }
 
-    pub fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<f64> {
+    pub(crate) fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<f64> {
         let lib = compile(
             &self.metadata.compiler,
             &self.temp_dir,

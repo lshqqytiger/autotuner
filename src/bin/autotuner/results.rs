@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-pub struct Result(Arc<Instance>, f64);
+pub(crate) struct Result(Arc<Instance>, f64);
 
 impl Result {
     fn into_tuple(self) -> (Arc<Instance>, f64) {
@@ -38,13 +38,13 @@ impl Ord for Result {
     }
 }
 
-pub enum Results {
+pub(crate) enum Results {
     Cache(Cache<Arc<Instance>, f64>),
     Trace(BinaryHeap<Result>),
 }
 
 impl Results {
-    pub fn new(cache_size: usize) -> Self {
+    pub(crate) fn new(cache_size: usize) -> Self {
         if cache_size > 0 {
             Results::Cache(Cache::new(cache_size))
         } else {
@@ -52,14 +52,14 @@ impl Results {
         }
     }
 
-    pub fn get(&mut self, key: &Arc<Instance>) -> Option<&f64> {
+    pub(crate) fn get(&mut self, key: &Arc<Instance>) -> Option<&f64> {
         match self {
             Results::Cache(cache) => cache.get(key),
             Results::Trace(_) => None,
         }
     }
 
-    pub fn insert(&mut self, key: Arc<Instance>, value: f64) {
+    pub(crate) fn insert(&mut self, key: Arc<Instance>, value: f64) {
         match self {
             Results::Cache(cache) => {
                 cache.insert(key, value);
@@ -70,7 +70,7 @@ impl Results {
         }
     }
 
-    pub fn iter(&self) -> Iter {
+    pub(crate) fn iter(&self) -> Iter<'_> {
         match self {
             Results::Cache(cache) => Iter::Cache(cache.iter()),
             Results::Trace(trace) => Iter::Trace(trace.iter()),
@@ -90,7 +90,7 @@ impl IntoIterator for Results {
     }
 }
 
-pub enum IntoIter {
+pub(crate) enum IntoIter {
     Cache(hashlru::IntoIter<Arc<Instance>, f64>),
     Trace(binary_heap::IntoIter<Result>),
 }
@@ -106,7 +106,7 @@ impl Iterator for IntoIter {
     }
 }
 
-pub enum Iter<'iter> {
+pub(crate) enum Iter<'iter> {
     Cache(hashlru::Iter<'iter, Arc<Instance>, f64>),
     Trace(binary_heap::Iter<'iter, Result>),
 }
