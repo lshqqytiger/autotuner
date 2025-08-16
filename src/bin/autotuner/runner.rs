@@ -5,6 +5,7 @@ use libloading::{Library, Symbol};
 use signal_hook_registry::{register_unchecked, unregister};
 use std::{
     ffi::{self, OsStr},
+    fs,
     process::{self, Command},
     ptr, thread,
 };
@@ -67,11 +68,16 @@ unsafe impl Sync for Workspace {}
 fn compile<S: AsRef<OsStr>>(
     compiler: &String,
     temp_dir: &TempDir,
+    id: String,
     arguments: impl Iterator<Item = S>,
 ) -> anyhow::Result<Library> {
     let path = temp_dir
         .path()
-        .join(thread::current().name().unwrap_or("temp"));
+        .join(thread::current().name().unwrap_or("unnamed"));
+    if !fs::exists(&path)? {
+        fs::create_dir(&path)?;
+    }
+    let path = path.join(id);
     let mut compiler = Command::new(compiler);
     let compiler = compiler.arg("-shared").arg("-o").arg(&path).args(arguments);
 
@@ -101,6 +107,7 @@ impl Runner {
         let base = compile(
             &metadata.compiler,
             &temp_dir,
+            "base".to_string(),
             sources.iter().chain(metadata.compiler_arguments.iter()),
         )?;
         let mut runner = Runner {
@@ -121,6 +128,7 @@ impl Runner {
         let lib = compile(
             &self.metadata.compiler,
             &self.temp_dir,
+            "temp".to_string(),
             self.sources
                 .iter()
                 .chain(self.metadata.compiler_arguments.iter())

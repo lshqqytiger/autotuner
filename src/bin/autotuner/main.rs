@@ -1,12 +1,13 @@
+mod manually_move;
 mod results;
 mod runner;
 mod saved_state;
 mod utils;
 
-use crate::{runner::Runner, saved_state::SavedState};
+use crate::{manually_move::ManuallyMove, runner::Runner, saved_state::SavedState};
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
-use autotuner::{manually_move::ManuallyMove, metadata::Metadata, parameter::Instance};
+use autotuner::{metadata::Metadata, parameter::Instance};
 use libc::SIGQUIT;
 use rand::seq::SliceRandom;
 use rayon::{ThreadPoolBuilder, prelude::*};
@@ -335,6 +336,8 @@ fn main() -> anyhow::Result<()> {
         )
         .expect("Failed to write results to file");
     }
+
+    ManuallyMove::drop(is_canceled);
 
     Ok(())
 }
