@@ -184,9 +184,9 @@ impl Instance {
         Instance {
             id: parameters
                 .iter()
-                .map(|(name, code)| format!("{}={}", name, code.to_string()))
+                .map(|(name, code)| format!("{}${}", name, code.to_string()))
                 .collect::<Vec<_>>()
-                .join(",")
+                .join(";")
                 .intern(),
             profile,
             parameters,

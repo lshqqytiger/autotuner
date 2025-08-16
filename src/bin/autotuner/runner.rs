@@ -6,6 +6,7 @@ use signal_hook_registry::{register_unchecked, unregister};
 use std::{
     ffi::{self, OsStr},
     fs,
+    path::Path,
     process::{self, Command},
     ptr, thread,
 };
@@ -67,24 +68,20 @@ unsafe impl Sync for Workspace {}
 
 fn compile<S: AsRef<OsStr>>(
     compiler: &String,
-    temp_dir: &TempDir,
-    id: String,
+    output: &Path,
     arguments: impl Iterator<Item = S>,
 ) -> anyhow::Result<Library> {
-    let path = temp_dir
-        .path()
-        .join(thread::current().name().unwrap_or("unnamed"));
-    if !fs::exists(&path)? {
-        fs::create_dir(&path)?;
-    }
-    let path = path.join(id);
     let mut compiler = Command::new(compiler);
-    let compiler = compiler.arg("-shared").arg("-o").arg(&path).args(arguments);
+    let compiler = compiler
+        .arg("-shared")
+        .arg("-o")
+        .arg(output)
+        .args(arguments);
 
     let mut compiler = compiler.spawn()?;
     compiler.wait()?;
 
-    let lib = unsafe { Library::new(&path) }?;
+    let lib = unsafe { Library::new(output) }?;
     Ok(lib)
 }
 
@@ -104,10 +101,10 @@ impl Runner {
     ) -> anyhow::Result<Self> {
         let temp_dir = TempDir::new("autotuner")?;
         let workspaces = Vec::with_capacity(parallelism);
+        let path = temp_dir.path().join("base");
         let base = compile(
             &metadata.compiler,
-            &temp_dir,
-            "base".to_string(),
+            &path,
             sources.iter().chain(metadata.compiler_arguments.iter()),
         )?;
         let mut runner = Runner {
@@ -125,10 +122,15 @@ impl Runner {
     }
 
     pub(crate) fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<f64> {
+        let path = self
+            .temp_dir
+            .path()
+            .join(thread::current().name().unwrap_or("unnamed"));
+        // TODO: leave binary and avoid recompilation
+
         let lib = compile(
             &self.metadata.compiler,
-            &self.temp_dir,
-            "temp".to_string(),
+            &path,
             self.sources
                 .iter()
                 .chain(self.metadata.compiler_arguments.iter())
@@ -166,6 +168,9 @@ impl Runner {
                 return Ok(f64::INFINITY);
             }
         }
+
+        drop(lib);
+        fs::remove_file(path)?;
 
         Ok(fitnesses[fitnesses.len() / 2])
     }
