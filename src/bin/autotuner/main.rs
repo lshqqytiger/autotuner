@@ -148,8 +148,8 @@ fn main() -> anyhow::Result<()> {
     });
 
     let mut i = 0;
-    let mut instances = ManuallyMove::new(Vec::new());
-    let mut results = ManuallyMove::new(Results::new(args.cache_size));
+    let mut instances = Vec::new();
+    let mut results = Results::new(args.cache_size);
     if let Some(saved_state) = saved_state {
         i = saved_state.i;
         for parameters in saved_state.instances {
@@ -169,7 +169,7 @@ fn main() -> anyhow::Result<()> {
         instances.push(Arc::new(instance));
     }
 
-    let runner = ManuallyMove::new(Runner::new(args.sources, metadata, args.parallelism)?);
+    let runner = Runner::new(args.sources, metadata, args.parallelism)?;
 
     let is_canceled = ManuallyMove::new(false);
     let sigquit_handler = unsafe {
