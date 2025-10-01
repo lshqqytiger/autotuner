@@ -30,6 +30,21 @@ impl FromArgValue for Direction {
     }
 }
 
+enum Criterion {
+    Maximum,
+    Median,
+}
+
+impl FromArgValue for Criterion {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        match value.to_lowercase().as_str() {
+            "maximum" => Ok(Criterion::Maximum),
+            "median" => Ok(Criterion::Median),
+            _ => Err(format!("Invalid criterion: {}", value)),
+        }
+    }
+}
+
 #[derive(FromArgs)]
 /// CLI Arguments
 struct Arguments {
@@ -43,6 +58,10 @@ struct Arguments {
     #[argh(option, short = 'd', default = "Direction::Maximize")]
     /// optimization direction (default: maximize)
     direction: Direction,
+
+    #[argh(option, short = 'c', default = "Criterion::Maximum")]
+    /// criterion to aggregate multiple runs (default: maximum)
+    criterion: Criterion,
 
     #[argh(option, short = 'i', default = "32")]
     /// initial population size (default: 32)
@@ -273,8 +292,21 @@ fn main() -> anyhow::Result<()> {
                     core_affinity::set_for_current(cores[index]);
 
                     let instance = instance.clone();
-                    let value = runner.evaluate(&instance, args.repetition)?;
-                    Ok((value, *i))
+                    Ok(match runner.evaluate(&instance, args.repetition) {
+                        Ok(mut values) => {
+                            let value = match args.criterion {
+                                Criterion::Maximum => {
+                                    values.into_iter().fold(f64::NEG_INFINITY, |a, b| a.max(b))
+                                }
+                                Criterion::Median => {
+                                    values.sort_by(|a, b| a.total_cmp(b));
+                                    values[values.len() / 2]
+                                }
+                            };
+                            (value, *i)
+                        }
+                        Err(_) => (f64::INFINITY, *i),
+                    })
                 })
                 .collect();
 

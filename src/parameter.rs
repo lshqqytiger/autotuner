@@ -8,6 +8,14 @@ pub enum Range {
     Sequence(i32, i32),
 }
 
+impl Range {
+    fn random(&self) -> i32 {
+        match self {
+            Range::Sequence(start, end) => rand::random_range(*start..=*end),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct IntegerTransformer(String);
 
@@ -52,12 +60,7 @@ impl Parameter {
             Parameter::Integer {
                 transformer: _,
                 range,
-            } => {
-                let value = match range {
-                    Range::Sequence(start, end) => rand::random_range(*start..=*end),
-                };
-                Code::Integer(value)
-            }
+            } => Code::Integer(range.random()),
             Parameter::Switch => Code::Switch(rand::random()),
             Parameter::Keyword { options } => Code::Keyword(rand::random_range(0..options.len())),
         }
@@ -100,31 +103,44 @@ impl Parameter {
                 },
                 Code::Integer(n),
             ) => {
-                // variation in -10% ~ +10% of the value
-                let mut variation = (*n as f64 * 0.1) as i32;
-                if variation == 0 {
-                    variation = 1;
+                // 10% chance to completely randomize the value
+                if rand::random_bool(0.1) {
+                    *n = range.random();
+                    return;
                 }
-                *n += rand::random_range(-variation..=variation);
 
-                #[allow(irrefutable_let_patterns)]
-                if let Range::Sequence(start, end) = range {
-                    if *n < *start {
-                        *n = *start;
-                    } else if *n > *end {
-                        *n = *end;
+                match range {
+                    Range::Sequence(start, end) => {
+                        // variation in -20% ~ +20%
+                        let mut variation = ((end - start) as f64 * 0.2) as i32;
+                        if variation == 0 {
+                            variation = 1;
+                        }
+                        *n += rand::random_range(-variation..=variation);
+
+                        if *n < *start {
+                            *n = *start;
+                        } else if *n > *end {
+                            *n = *end;
+                        }
                     }
                 }
             }
             (Parameter::Switch, Code::Switch(b)) => {
-                // 10% chance to flip the switch
-                if rand::random_ratio(1, 10) {
+                // 10% chance to completely randomize the switch
+                if rand::random_bool(0.1) {
                     *b = rand::random();
+                    return;
+                }
+
+                // 20% chance to flip the switch
+                if rand::random_bool(0.2) {
+                    *b = !*b;
                 }
             }
             (Parameter::Keyword { options }, Code::Keyword(i)) => {
-                // 10% chance to change the keyword
-                if rand::random_ratio(1, 10) {
+                // 20% chance to change the keyword
+                if rand::random_bool(0.2) {
                     *i = rand::random_range(0..options.len());
                 }
             }

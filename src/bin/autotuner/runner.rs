@@ -121,7 +121,11 @@ impl Runner {
         Ok(runner)
     }
 
-    pub(crate) fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<f64> {
+    pub(crate) fn evaluate(
+        &self,
+        instance: &Instance,
+        repetition: usize,
+    ) -> anyhow::Result<Vec<f64>> {
         let path = self
             .temp_dir
             .path()
@@ -159,20 +163,19 @@ impl Runner {
             }
             fitnesses.push(fitness);
         }
-        fitnesses.sort_by(|a, b| a.total_cmp(b));
 
         if let Some(block) = workspace.validation_ptr {
             let validator: Symbol<Validator> =
                 unsafe { lib.get(self.metadata.validator.as_ref().unwrap().as_bytes()) }?;
             if !unsafe { validator(block, workspace.output_ptr) } {
-                return Ok(f64::INFINITY);
+                return Err(anyhow!("Validation failed"));
             }
         }
 
         drop(lib);
         fs::remove_file(path)?;
 
-        Ok(fitnesses[fitnesses.len() / 2])
+        Ok(fitnesses)
     }
 }
 
