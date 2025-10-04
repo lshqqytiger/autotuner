@@ -32,6 +32,7 @@ impl FromArgValue for Direction {
 
 enum Criterion {
     Maximum,
+    Minimum,
     Median,
 }
 
@@ -39,6 +40,7 @@ impl FromArgValue for Criterion {
     fn from_arg_value(value: &str) -> Result<Self, String> {
         match value.to_lowercase().as_str() {
             "maximum" => Ok(Criterion::Maximum),
+            "minimum" => Ok(Criterion::Minimum),
             "median" => Ok(Criterion::Median),
             _ => Err(format!("Invalid criterion: {}", value)),
         }
@@ -297,6 +299,9 @@ fn main() -> anyhow::Result<()> {
                             let value = match args.criterion {
                                 Criterion::Maximum => {
                                     values.into_iter().fold(f64::NEG_INFINITY, |a, b| a.max(b))
+                                }
+                                Criterion::Minimum => {
+                                    values.into_iter().fold(f64::INFINITY, |a, b| a.min(b))
                                 }
                                 Criterion::Median => {
                                     values.sort_by(|a, b| a.total_cmp(b));
