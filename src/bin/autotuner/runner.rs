@@ -130,7 +130,10 @@ impl Runner {
             .temp_dir
             .path()
             .join(thread::current().name().unwrap_or("unnamed"));
-        // TODO: leave binary and avoid recompilation
+        if !path.exists() {
+            fs::create_dir(&path)?;
+        }
+        let path = path.join(instance.id.as_ref());
 
         let lib = compile(
             &self.metadata.compiler,
@@ -173,7 +176,6 @@ impl Runner {
         }
 
         drop(lib);
-        fs::remove_file(path)?;
 
         Ok(fitnesses)
     }

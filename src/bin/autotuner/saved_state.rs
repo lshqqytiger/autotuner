@@ -1,14 +1,13 @@
 use crate::results::Results;
 use autotuner::parameter::{Code, Instance};
-use fxhash::FxHashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SavedState {
     pub(crate) i: usize,
-    pub(crate) instances: Vec<FxHashMap<Arc<str>, Code>>,
-    pub(crate) results: Vec<(FxHashMap<Arc<str>, Code>, f64)>,
+    pub(crate) instances: Vec<BTreeMap<Arc<str>, Code>>,
+    pub(crate) results: Vec<(BTreeMap<Arc<str>, Code>, f64)>,
 }
 
 impl SavedState {

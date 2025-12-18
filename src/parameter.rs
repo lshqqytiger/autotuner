@@ -1,7 +1,9 @@
 use crate::interner::Intern;
-use fxhash::FxHashMap;
 use serde::{Deserialize, Serialize};
-use std::{convert::Infallible, fmt::Display, hash::Hash, str::FromStr, sync::Arc};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap, convert::Infallible, fmt::Display, hash::Hash, str::FromStr, sync::Arc,
+};
 
 #[derive(Serialize, Deserialize)]
 pub enum Range {
@@ -167,10 +169,10 @@ impl ToString for Code {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Profile(FxHashMap<Arc<str>, Parameter>);
+pub struct Profile(BTreeMap<Arc<str>, Parameter>);
 
 impl Profile {
-    pub fn new(profile: FxHashMap<Arc<str>, Parameter>) -> Arc<Self> {
+    pub fn new(profile: BTreeMap<Arc<str>, Parameter>) -> Arc<Self> {
         Arc::new(Profile(profile))
     }
 
@@ -180,7 +182,7 @@ impl Profile {
             self.0
                 .iter()
                 .map(|(name, parameter)| (name.clone(), parameter.random()))
-                .collect::<FxHashMap<Arc<str>, Code>>(),
+                .collect::<BTreeMap<Arc<str>, Code>>(),
         )
     }
 
@@ -190,19 +192,18 @@ impl Profile {
 }
 
 pub struct Instance {
-    id: Arc<str>,
+    pub id: Arc<str>,
     profile: Arc<Profile>,
-    pub parameters: FxHashMap<Arc<str>, Code>,
+    pub parameters: BTreeMap<Arc<str>, Code>,
 }
 
 impl Instance {
-    pub fn new(profile: Arc<Profile>, parameters: FxHashMap<Arc<str>, Code>) -> Self {
+    pub fn new(profile: Arc<Profile>, parameters: BTreeMap<Arc<str>, Code>) -> Self {
         Instance {
-            id: parameters
+            id: Sha256::digest(serde_json::to_vec(&parameters).unwrap())
                 .iter()
-                .map(|(name, code)| format!("{}${}", name, code.to_string()))
-                .collect::<Vec<_>>()
-                .join(";")
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
                 .intern(),
             profile,
             parameters,
@@ -210,7 +211,7 @@ impl Instance {
     }
 
     pub fn crossover(a: &Instance, b: &Instance) -> Instance {
-        let mut parameters = FxHashMap::default();
+        let mut parameters = BTreeMap::new();
         for parameter in &a.parameters {
             parameters.insert(
                 parameter.0.clone(),

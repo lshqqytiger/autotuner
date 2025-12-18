@@ -1,22 +1,24 @@
+use argh::FromArgValue;
 use autotuner::parameter::Instance;
-use hashlru::Cache;
-use std::{
-    cmp,
-    collections::{BinaryHeap, binary_heap},
-    sync::Arc,
-};
+use std::{cmp, collections::BinaryHeap, result, sync::Arc};
 
-pub(crate) struct Result(Arc<Instance>, f64);
+#[derive(Clone, Copy)]
+pub(crate) enum Direction {
+    Minimize,
+    Maximize,
+}
 
-impl Result {
-    fn into_tuple(self) -> (Arc<Instance>, f64) {
-        (self.0, self.1)
-    }
-
-    fn into_tuple_ref(&self) -> (&Arc<Instance>, &f64) {
-        (&self.0, &self.1)
+impl FromArgValue for Direction {
+    fn from_arg_value(value: &str) -> result::Result<Self, String> {
+        match value.to_lowercase().as_str() {
+            "minimize" => Ok(Direction::Minimize),
+            "maximize" => Ok(Direction::Maximize),
+            _ => Err(format!("Invalid direction: {}", value)),
+        }
     }
 }
+
+pub(crate) struct Result(Arc<Instance>, f64);
 
 impl PartialEq for Result {
     fn eq(&self, other: &Self) -> bool {
@@ -38,86 +40,80 @@ impl Ord for Result {
     }
 }
 
-pub(crate) enum Results {
-    Cache(Cache<Arc<Instance>, f64>),
-    Trace(BinaryHeap<Result>),
+enum Heap<T: Ord> {
+    Min(BinaryHeap<T>),
+    Max(BinaryHeap<cmp::Reverse<T>>),
+}
+
+impl<T: Ord> Heap<T> {
+    fn new(direction: Direction) -> Self {
+        match direction {
+            Direction::Minimize => Heap::Min(BinaryHeap::new()),
+            Direction::Maximize => Heap::Max(BinaryHeap::new()),
+        }
+    }
+
+    fn push(&mut self, value: T) {
+        match self {
+            Heap::Min(heap) => heap.push(value),
+            Heap::Max(heap) => heap.push(cmp::Reverse(value)),
+        }
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        match self {
+            Heap::Min(heap) => heap.pop(),
+            Heap::Max(heap) => heap.pop().map(|rev| rev.0),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Heap::Min(heap) => heap.len(),
+            Heap::Max(heap) => heap.len(),
+        }
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = &T> + '_> {
+        match self {
+            Heap::Min(heap) => Box::new(heap.iter()),
+            Heap::Max(heap) => Box::new(heap.iter().map(|rev| &rev.0)),
+        }
+    }
+}
+
+pub(crate) struct Results {
+    heap: Heap<Result>,
+    size: usize,
 }
 
 impl Results {
-    pub(crate) fn new(cache_size: usize) -> Self {
-        if cache_size > 0 {
-            Results::Cache(Cache::new(cache_size))
+    pub(crate) fn new(direction: Direction, size: usize) -> Self {
+        Results {
+            heap: Heap::new(direction),
+            size,
+        }
+    }
+
+    pub(crate) fn push(&mut self, instance: Arc<Instance>, fitness: f64) {
+        let result = Result(instance, fitness);
+        if self.heap.len() < self.size {
+            self.heap.push(result);
         } else {
-            Results::Trace(BinaryHeap::new())
-        }
-    }
-
-    pub(crate) fn get(&mut self, key: &Arc<Instance>) -> Option<&f64> {
-        match self {
-            Results::Cache(cache) => cache.get(key),
-            Results::Trace(_) => None,
-        }
-    }
-
-    pub(crate) fn insert(&mut self, key: Arc<Instance>, value: f64) {
-        match self {
-            Results::Cache(cache) => {
-                cache.insert(key, value);
-            }
-            Results::Trace(trace) => {
-                trace.push(Result(key, value));
+            match self.heap.pop() {
+                Some(top) => {
+                    if fitness < top.1 {
+                        self.heap.push(result);
+                    } else {
+                        self.heap.push(top);
+                    }
+                }
+                None => {}
             }
         }
     }
 
-    pub(crate) fn iter(&self) -> Iter<'_> {
-        match self {
-            Results::Cache(cache) => Iter::Cache(cache.iter()),
-            Results::Trace(trace) => Iter::Trace(trace.iter()),
-        }
-    }
-}
-
-impl IntoIterator for Results {
-    type Item = (Arc<Instance>, f64);
-    type IntoIter = IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        match self {
-            Results::Cache(cache) => IntoIter::Cache(cache.into_iter()),
-            Results::Trace(trace) => IntoIter::Trace(trace.into_iter()),
-        }
-    }
-}
-
-pub(crate) enum IntoIter {
-    Cache(hashlru::IntoIter<Arc<Instance>, f64>),
-    Trace(binary_heap::IntoIter<Result>),
-}
-
-impl Iterator for IntoIter {
-    type Item = (Arc<Instance>, f64);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            IntoIter::Cache(iter) => iter.next(),
-            IntoIter::Trace(iter) => iter.next().map(Result::into_tuple),
-        }
-    }
-}
-
-pub(crate) enum Iter<'iter> {
-    Cache(hashlru::Iter<'iter, Arc<Instance>, f64>),
-    Trace(binary_heap::Iter<'iter, Result>),
-}
-
-impl<'iter> Iterator for Iter<'iter> {
-    type Item = (&'iter Arc<Instance>, &'iter f64);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Iter::Cache(iter) => iter.next(),
-            Iter::Trace(iter) => iter.next().map(Result::into_tuple_ref),
-        }
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Arc<Instance>, &f64)> {
+        self.heap.iter().map(|result| (&result.0, &result.1))
     }
 }

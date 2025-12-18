@@ -4,31 +4,20 @@ mod runner;
 mod saved_state;
 mod utils;
 
-use crate::{manually_move::ManuallyMove, runner::Runner, saved_state::SavedState};
+use crate::{
+    manually_move::ManuallyMove,
+    results::{Direction, Results},
+    runner::Runner,
+    saved_state::SavedState,
+};
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
 use autotuner::{metadata::Metadata, parameter::Instance};
 use libc::SIGQUIT;
 use rand::seq::SliceRandom;
 use rayon::{ThreadPoolBuilder, prelude::*};
-use results::Results;
 use signal_hook_registry::{register, unregister};
 use std::{fs, sync::Arc, time::SystemTime};
-
-enum Direction {
-    Minimize,
-    Maximize,
-}
-
-impl FromArgValue for Direction {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value.to_lowercase().as_str() {
-            "minimize" => Ok(Direction::Minimize),
-            "maximize" => Ok(Direction::Maximize),
-            _ => Err(format!("Invalid direction: {}", value)),
-        }
-    }
-}
 
 enum Criterion {
     Maximum,
@@ -65,29 +54,29 @@ struct Arguments {
     /// criterion to aggregate multiple runs (default: maximum)
     criterion: Criterion,
 
-    #[argh(option, short = 'i', default = "32")]
-    /// initial population size (default: 32)
+    #[argh(option, short = 'i', default = "256")]
+    /// initial population size (default: 256)
     initial: usize,
 
-    #[argh(option, short = 'n', default = "16")]
-    /// number of instances that will be made at each generation (default: 16)
+    #[argh(option, short = 'n', default = "32")]
+    /// number of instances that will be made at each generation (default: 32)
     ngeneration: usize,
 
-    #[argh(option, short = 'r', default = "1")]
-    /// number of repetitions for each instance (default: 1)
+    #[argh(option, short = 'r', default = "15")]
+    /// number of repetitions for each instance (default: 15)
     repetition: usize,
 
-    #[argh(option, short = 'l', default = "64")]
-    /// maximum number of generations (default: 64)
+    #[argh(option, short = 'l', default = "256")]
+    /// maximum number of generations (default: 256)
     limit: usize,
 
     #[argh(option, short = 'p', default = "1")]
     /// number of instances that will be evaluated in parallel (default: 1)
     parallelism: usize,
 
-    #[argh(option, default = "4096")]
-    /// cache size in number of entries (default: 4096)
-    cache_size: usize,
+    #[argh(option, default = "32")]
+    /// number of candidates (default: 32)
+    candidates: usize,
 
     #[argh(option, arg_name = "continue")]
     /// continue from the saved state file
@@ -102,30 +91,32 @@ fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usi
     assert!(!roulette.is_empty());
     assert_ne!(n, 0);
 
+    assert!(roulette.iter().all(|(f, _)| *f >= 0.0));
+
     let total_fitness: f64 = roulette.iter().map(|(fitness, _)| fitness).sum();
     assert!(total_fitness > 0.0);
 
     let distance = total_fitness / n as f64;
-
     let start = rand::random::<f64>() * distance;
 
     let mut selected = Vec::with_capacity(n);
+
     let mut current_sum = 0.0;
-    let mut current_index = 0;
+    let mut current_index = 0usize;
 
     for i in 0..n {
         let pointer = start + i as f64 * distance;
 
-        while current_sum < pointer && current_index < roulette.len() {
+        while current_index < roulette.len() && current_sum < pointer {
             current_sum += roulette[current_index].0;
-            if current_sum >= pointer {
-                selected.push(roulette[current_index].1);
-                break;
-            }
             current_index += 1;
         }
 
-        if selected.len() <= i {
+        if current_index == 0 {
+            selected.push(roulette[0].1);
+        } else if current_index <= roulette.len() {
+            selected.push(roulette[current_index - 1].1);
+        } else {
             selected.push(roulette[roulette.len() - 1].1);
         }
     }
@@ -170,7 +161,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut i = 0;
     let mut instances = Vec::new();
-    let mut results = Results::new(args.cache_size);
+    let mut results = Results::new(args.direction, args.candidates);
     if let Some(saved_state) = saved_state {
         i = saved_state.i;
         for parameters in saved_state.instances {
@@ -181,7 +172,7 @@ fn main() -> anyhow::Result<()> {
         }
         for (parameters, fitness) in saved_state.results {
             let instance = Arc::new(Instance::new(metadata.profile.clone(), parameters));
-            results.insert(instance, fitness);
+            results.push(instance, fitness);
         }
     }
 
@@ -264,28 +255,13 @@ fn main() -> anyhow::Result<()> {
         let len = instances.len();
         let mut fresh_instances = Vec::new();
         for index in 0..len {
-            if let Some(&fitness) = results.get(&instances[index]) {
-                evaluation_results.push((fitness, index));
-                continue;
-            }
             fresh_instances.push((index, instances[index].clone()));
         }
 
         let len = fresh_instances.len();
         for i in 0..utils::round_up(len, args.parallelism) {
-            let fresh_instances =
-                &fresh_instances[(i * args.parallelism)..((i + 1) * args.parallelism).min(len)];
-
-            if fresh_instances.len() == 1 {
-                println!("Running kernel {}", fresh_instances[0].1);
-            } else {
-                println!("Running kernels below: ");
-                for (_, instance) in fresh_instances {
-                    println!("- {}", instance);
-                }
-            }
-
             let chunk: Vec<anyhow::Result<(f64, usize)>> = fresh_instances
+                [(i * args.parallelism)..((i + 1) * args.parallelism).min(len)]
                 .par_iter()
                 .map(|(i, instance)| {
                     let tid = rayon::current_thread_index().unwrap_or(0);
@@ -317,7 +293,8 @@ fn main() -> anyhow::Result<()> {
 
             for result in chunk {
                 let result = result?;
-                results.insert(instances[result.1].clone(), result.0);
+                println!("{} ms", result.0);
+                results.push(instances[result.1].clone(), result.0);
                 evaluation_results.push(result);
             }
 

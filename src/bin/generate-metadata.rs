@@ -3,9 +3,8 @@ use autotuner::{
     metadata::Metadata,
     parameter::{IntegerTransformer, Parameter, Profile, Range},
 };
-use fxhash::FxHashMap;
 use inquire::{CustomType, Select, Text, validator::Validation};
-use std::fs;
+use std::{collections::BTreeMap, fs};
 
 #[cfg(target_arch = "aarch64")]
 const DEFAULT_COMPILER: &str = "armclang";
@@ -13,7 +12,7 @@ const DEFAULT_COMPILER: &str = "armclang";
 const DEFAULT_COMPILER: &str = "icc";
 
 fn main() -> anyhow::Result<()> {
-    let mut profile = FxHashMap::default();
+    let mut profile = BTreeMap::new();
     while let Some(name) = Text::new("Parameter name")
         .with_help_message("Enter the name of the parameter (e.g., A, B, C)")
         .prompt_skippable()?
