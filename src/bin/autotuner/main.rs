@@ -1,23 +1,103 @@
+mod compile;
+mod error;
+mod helper;
 mod manually_move;
 mod results;
-mod runner;
-mod saved_state;
 mod utils;
+mod workspace;
 
 use crate::{
+    error::Error,
+    helper::*,
     manually_move::ManuallyMove,
     results::{Direction, Results},
-    runner::Runner,
-    saved_state::SavedState,
+    workspace::Workspace,
 };
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
-use autotuner::{metadata::Metadata, parameter::Instance};
-use libc::SIGQUIT;
+use autotuner::{
+    metadata::Metadata,
+    parameter::{Instance, Profile},
+};
+use libc::{SIGQUIT, SIGSEGV};
+use libloading::{Library, Symbol};
 use rand::seq::SliceRandom;
-use rayon::{ThreadPoolBuilder, prelude::*};
-use signal_hook_registry::{register, unregister};
-use std::{fs, sync::Arc, time::SystemTime};
+use serde::{Deserialize, Serialize};
+use signal_hook_registry::{register, register_unchecked, unregister};
+use std::{fs, process, ptr, sync::Arc, time::SystemTime};
+use tempdir::TempDir;
+
+#[derive(FromArgs)]
+/// CLI Arguments
+struct Options {
+    #[argh(positional)]
+    sources: Vec<String>,
+
+    #[argh(option, short = 'm')]
+    /// metadata file (required)
+    metadata: String,
+
+    #[argh(option, short = 'd', default = "Direction::Maximize")]
+    /// optimization direction (default: maximize)
+    direction: Direction,
+
+    #[argh(subcommand)]
+    /// search strategy (default: genetic)
+    strategy: Strategy,
+
+    #[argh(option, short = 'c', default = "Criterion::Maximum")]
+    /// criterion to aggregate multiple runs (default: maximum)
+    criterion: Criterion,
+
+    #[argh(option, short = 'r', default = "15")]
+    /// number of repetitions for each instance (default: 15)
+    repetition: usize,
+
+    #[argh(option, default = "32")]
+    /// number of candidates (default: 32)
+    candidates: usize,
+
+    #[argh(option, arg_name = "continue")]
+    /// continue from the saved state file
+    continue_: Option<String>,
+
+    #[argh(option, default = "\"results.json\".to_string()")]
+    /// output file (default: results.json)
+    output: String,
+
+    #[argh(option, short = 'v', default = "false")]
+    /// verbose output
+    verbose: bool,
+}
+
+#[derive(FromArgs, PartialEq, Debug, Clone)]
+/// exhaustive search options
+#[argh(subcommand, name = "exhaustive")]
+struct ExhaustiveSearchOptions {}
+
+#[derive(FromArgs, PartialEq, Debug, Clone)]
+/// genetic search options
+#[argh(subcommand, name = "genetic")]
+struct GeneticSearchOptions {
+    #[argh(option, short = 'i', default = "256")]
+    /// initial population size (default: 256)
+    initial: usize,
+
+    #[argh(option, short = 'n', default = "32")]
+    /// number of instances that will be made at each generation (default: 32)
+    ngeneration: usize,
+
+    #[argh(option, short = 'l', default = "256")]
+    /// maximum number of generations (default: 256)
+    limit: usize,
+}
+
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand)]
+enum Strategy {
+    Exhaustive(ExhaustiveSearchOptions),
+    Genetic(GeneticSearchOptions),
+}
 
 enum Criterion {
     Maximum,
@@ -36,322 +116,433 @@ impl FromArgValue for Criterion {
     }
 }
 
-#[derive(FromArgs)]
-/// CLI Arguments
-struct Arguments {
-    #[argh(positional)]
-    sources: Vec<String>,
-
-    #[argh(option, short = 'm')]
-    /// metadata file (required)
-    metadata: String,
-
-    #[argh(option, short = 'd', default = "Direction::Maximize")]
-    /// optimization direction (default: maximize)
-    direction: Direction,
-
-    #[argh(option, short = 'c', default = "Criterion::Maximum")]
-    /// criterion to aggregate multiple runs (default: maximum)
-    criterion: Criterion,
-
-    #[argh(option, short = 'i', default = "256")]
-    /// initial population size (default: 256)
-    initial: usize,
-
-    #[argh(option, short = 'n', default = "32")]
-    /// number of instances that will be made at each generation (default: 32)
-    ngeneration: usize,
-
-    #[argh(option, short = 'r', default = "15")]
-    /// number of repetitions for each instance (default: 15)
-    repetition: usize,
-
-    #[argh(option, short = 'l', default = "256")]
-    /// maximum number of generations (default: 256)
-    limit: usize,
-
-    #[argh(option, short = 'p', default = "1")]
-    /// number of instances that will be evaluated in parallel (default: 1)
-    parallelism: usize,
-
-    #[argh(option, default = "32")]
-    /// number of candidates (default: 32)
-    candidates: usize,
-
-    #[argh(option, arg_name = "continue")]
-    /// continue from the saved state file
-    continue_: Option<String>,
-
-    #[argh(option, default = "\"results.json\".to_string()")]
-    /// output file (default: results.json)
-    output: String,
+impl Criterion {
+    fn enforce(&self, mut values: Vec<f64>) -> f64 {
+        match self {
+            Criterion::Maximum => values.iter().fold(f64::NEG_INFINITY, |a, b| a.max(*b)),
+            Criterion::Minimum => values.iter().fold(f64::INFINITY, |a, b| a.min(*b)),
+            Criterion::Median => {
+                values.sort_by(|a, b| a.total_cmp(b));
+                values[values.len() / 2]
+            }
+        }
+    }
 }
 
-fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usize> {
-    assert!(!roulette.is_empty());
-    assert_ne!(n, 0);
+#[derive(Serialize, Deserialize)]
+struct ExhaustiveSearchState {
+    iter: utils::exhaustive::Iter,
+}
 
-    assert!(roulette.iter().all(|(f, _)| *f >= 0.0));
+impl ExhaustiveSearchState {
+    fn new(profile: &Profile) -> Self {
+        ExhaustiveSearchState {
+            iter: utils::exhaustive::Iter::from(profile),
+        }
+    }
+}
 
-    let total_fitness: f64 = roulette.iter().map(|(fitness, _)| fitness).sum();
-    assert!(total_fitness > 0.0);
+#[derive(Serialize, Deserialize)]
+struct GeneticSearchState {
+    generation: usize,
+    instances: Vec<Arc<Instance>>,
+}
 
-    let distance = total_fitness / n as f64;
-    let start = rand::random::<f64>() * distance;
+impl GeneticSearchState {
+    fn new(profile: &Profile, initial: usize) -> Self {
+        let mut instances = Vec::with_capacity(initial);
+        for _ in 0..initial {
+            instances.push(Arc::new(utils::genetic::random(profile)));
+        }
+        GeneticSearchState {
+            generation: 0,
+            instances,
+        }
+    }
+}
 
-    let mut selected = Vec::with_capacity(n);
+#[derive(Serialize, Deserialize)]
+pub(crate) enum SavedState {
+    Exhaustive(ExhaustiveSearchState),
+    Genetic(GeneticSearchState),
+}
 
-    let mut current_sum = 0.0;
-    let mut current_index = 0usize;
+impl From<ExhaustiveSearchState> for SavedState {
+    fn from(state: ExhaustiveSearchState) -> Self {
+        SavedState::Exhaustive(state)
+    }
+}
 
-    for i in 0..n {
-        let pointer = start + i as f64 * distance;
+impl From<GeneticSearchState> for SavedState {
+    fn from(state: GeneticSearchState) -> Self {
+        SavedState::Genetic(state)
+    }
+}
 
-        while current_index < roulette.len() && current_sum < pointer {
-            current_sum += roulette[current_index].0;
-            current_index += 1;
+struct Autotuner<'s> {
+    sources: &'s [String],
+    metadata: Metadata,
+    temp_dir: TempDir,
+    base: Library,
+    workspace: Workspace,
+}
+
+impl<'s> Autotuner<'s> {
+    fn new(sources: &'s [String], metadata: Metadata) -> Result<Self, Error> {
+        let temp_dir = TempDir::new("autotuner").expect("Failed to create temporary directory");
+        let path = temp_dir.path().join("base");
+        let base = compile::compile(
+            &metadata.compiler,
+            &path,
+            sources.iter().chain(metadata.compiler_arguments.iter()),
+        )
+        .expect("Failed to compile base library");
+        let workspace = Workspace::new(&base, &metadata).expect("Failed to create workspace");
+
+        let autotuner = Autotuner {
+            sources,
+            metadata,
+            temp_dir,
+            base,
+            workspace,
+        };
+
+        Ok(autotuner)
+    }
+
+    fn run(
+        &self,
+        direction: &Direction,
+        strategy: &Strategy,
+        criterion: &Criterion,
+        repetition: usize,
+        candidates: usize,
+        state: Option<SavedState>,
+        verbose: bool,
+    ) -> Result<Vec<(String, f64)>, Error> {
+        let is_canceled = ManuallyMove::new(false);
+        let sigquit_handler = unsafe {
+            let is_canceled = is_canceled.clone();
+            register(SIGQUIT, move || {
+                let mut is_canceled = is_canceled.mov();
+                *is_canceled = true;
+            })
+        };
+
+        let mut saved_state: Option<SavedState> = None;
+        let mut results = Results::new(direction, candidates);
+        match strategy {
+            Strategy::Exhaustive(_) => {
+                let mut state = if let Some(SavedState::Exhaustive(state)) = state {
+                    state
+                } else {
+                    ExhaustiveSearchState::new(&self.metadata.profile)
+                };
+
+                for instance in &mut state.iter {
+                    unsafe {
+                        utils::block(SIGQUIT);
+                    }
+
+                    if verbose {
+                        println!(
+                            "Evaluating kernel: {}",
+                            self.metadata.profile.display(&instance)
+                        );
+                    }
+
+                    let result = match self.evaluate(&instance, repetition) {
+                        Ok(values) => criterion.enforce(values),
+                        Err(_) => f64::INFINITY,
+                    };
+
+                    println!("{} ms", result);
+                    results.push(Arc::new(instance), result);
+
+                    unsafe {
+                        utils::unblock(SIGQUIT);
+                    }
+
+                    if *is_canceled {
+                        saved_state = Some(state.into());
+                        break;
+                    }
+                }
+            }
+            Strategy::Genetic(options) => {
+                let mut state = if let Some(SavedState::Genetic(state)) = state {
+                    state
+                } else {
+                    GeneticSearchState::new(&self.metadata.profile, options.initial)
+                };
+
+                let mut evaluation_results: Vec<(f64, usize)> = Vec::with_capacity(options.initial);
+                let mut rng = rand::rng();
+                while state.generation < options.limit {
+                    if !evaluation_results.is_empty() {
+                        let min = evaluation_results
+                            .iter()
+                            .filter(|(x, _)| !x.is_infinite())
+                            .fold(f64::INFINITY, |a, &b| a.min(b.0));
+                        let max = evaluation_results
+                            .iter()
+                            .filter(|(x, _)| !x.is_infinite())
+                            .fold(f64::NEG_INFINITY, |a, &b| a.max(b.0));
+                        println!("min = {}, max = {}", min, max);
+
+                        let mut inversed = evaluation_results.clone();
+                        for pair in &mut inversed {
+                            if pair.0.is_infinite() {
+                                pair.0 = max;
+                                continue;
+                            }
+
+                            pair.0 = match direction {
+                                Direction::Minimize => pair.0,
+                                Direction::Maximize => max - pair.0,
+                            };
+                        }
+                        inversed.shuffle(&mut rng);
+                        let holes = utils::genetic::stochastic_universal_sampling(
+                            &inversed,
+                            options.ngeneration,
+                        );
+                        drop(inversed);
+
+                        for result in &mut evaluation_results {
+                            if result.0.is_infinite() {
+                                result.0 = min;
+                                continue;
+                            }
+
+                            result.0 = match direction {
+                                Direction::Minimize => max - result.0,
+                                Direction::Maximize => result.0,
+                            };
+                        }
+                        evaluation_results.shuffle(&mut rng);
+
+                        let mut children = Vec::with_capacity(options.ngeneration);
+                        for _ in 0..options.ngeneration {
+                            let result = utils::genetic::stochastic_universal_sampling(
+                                &evaluation_results,
+                                2,
+                            );
+                            let mut child = utils::genetic::crossover(
+                                &self.metadata.profile,
+                                &state.instances[result[0]],
+                                &state.instances[result[1]],
+                            );
+                            utils::genetic::mutate(&self.metadata.profile, &mut child);
+                            children.push(child);
+                        }
+
+                        for (index, instance) in children.into_iter().enumerate() {
+                            state.instances[holes[index]] = Arc::new(instance);
+                        }
+
+                        evaluation_results.clear();
+                    }
+
+                    println!("#{}", state.generation + 1);
+
+                    let len = state.instances.len();
+                    let mut fresh_instances = Vec::new();
+                    for index in 0..len {
+                        fresh_instances.push((index, state.instances[index].clone()));
+                    }
+
+                    let len = fresh_instances.len();
+                    for i in 0..len {
+                        unsafe {
+                            utils::block(SIGQUIT);
+                        }
+
+                        if verbose {
+                            println!(
+                                "Evaluating kernel {}/{}: {}",
+                                i + 1,
+                                len,
+                                self.metadata.profile.display(&fresh_instances[i].1)
+                            );
+                        }
+
+                        let result = match self.evaluate(&fresh_instances[i].1, repetition) {
+                            Ok(values) => criterion.enforce(values),
+                            Err(_) => f64::INFINITY,
+                        };
+                        println!("{} ms", result);
+                        results.push(state.instances[i].clone(), result);
+                        evaluation_results.push((result, i));
+
+                        unsafe {
+                            utils::unblock(SIGQUIT);
+                        }
+
+                        if *is_canceled {
+                            break;
+                        }
+                    }
+
+                    if *is_canceled {
+                        saved_state = Some(state.into());
+                        break;
+                    }
+
+                    state.generation += 1;
+                }
+            }
         }
 
-        if current_index == 0 {
-            selected.push(roulette[0].1);
-        } else if current_index <= roulette.len() {
-            selected.push(roulette[current_index - 1].1);
+        // The signal handler must be unregistered early enough.
+        if let Ok(sigquit_handler) = sigquit_handler {
+            unregister(sigquit_handler);
+        }
+
+        if let Some(Ok(finalizer)) = self
+            .metadata
+            .finalizer
+            .as_ref()
+            .map(|name| unsafe { self.base.get::<Finalizer>(name.as_bytes()) })
+        {
+            let validation_ptr = if let Some(ptr) = self.workspace.validation_ptr {
+                ptr
+            } else {
+                ptr::null_mut()
+            };
+            unsafe {
+                finalizer(
+                    self.workspace.input_ptr,
+                    self.workspace.output_ptr,
+                    validation_ptr,
+                );
+            }
+        }
+
+        if *is_canceled.leak() {
+            Err(Error::Saved(saved_state.unwrap()))
         } else {
-            selected.push(roulette[roulette.len() - 1].1);
+            let instances = results
+                .iter()
+                .map(|(instance, fitness)| (self.metadata.profile.display(instance), *fitness))
+                .collect::<Vec<_>>();
+            Ok(instances)
         }
     }
 
-    selected
+    fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<Vec<f64>> {
+        let path = self.temp_dir.path().join(instance.id.as_ref());
+        let lib = compile::compile(
+            &self.metadata.compiler,
+            &path,
+            self.sources
+                .iter()
+                .chain(self.metadata.compiler_arguments.iter())
+                .chain(self.metadata.profile.compiler_arguments(&instance).iter()),
+        )?;
+        let evaluator: Symbol<Evaluator> = unsafe { lib.get(self.metadata.evaluator.as_bytes()) }?;
+
+        let mut fitnesses = Vec::with_capacity(repetition);
+        for _ in 0..repetition {
+            let fitness = unsafe {
+                let result = register_unchecked(SIGSEGV, |_| {
+                    // can we do better than this?
+                    println!("Segmentation fault occurred during evaluation");
+                    process::exit(1);
+                });
+                let fitness = evaluator(self.workspace.input_ptr, self.workspace.output_ptr);
+                if let Ok(id) = result {
+                    unregister(id);
+                }
+                fitness
+            };
+            if fitness.is_nan() {
+                return Err(anyhow!("NaN value encountered"));
+            }
+            fitnesses.push(fitness);
+        }
+
+        if let Some(block) = self.workspace.validation_ptr {
+            let validator: Symbol<Validator> =
+                unsafe { lib.get(self.metadata.validator.as_ref().unwrap().as_bytes()) }?;
+            if !unsafe { validator(block, self.workspace.output_ptr) } {
+                return Err(anyhow!("Validation failed"));
+            }
+        }
+
+        drop(lib);
+
+        Ok(fitnesses)
+    }
 }
 
 fn main() -> anyhow::Result<()> {
-    let args: Arguments = argh::from_env();
-    if args.initial <= 1 {
-        return Err(anyhow!("Initial population size must be greater than 1"));
-    }
-    if args.ngeneration == 0 {
-        return Err(anyhow!("Number of each generation must be greater than 0"));
-    }
-    if args.parallelism == 0 {
-        return Err(anyhow!(
-            "Number of instances that will be evaluated in parallel must be greater than 0"
-        ));
+    let args: Options = argh::from_env();
+    match &args.strategy {
+        Strategy::Exhaustive(_) => {}
+        Strategy::Genetic(options) => {
+            if options.initial <= 1 {
+                return Err(anyhow!("Initial population size must be greater than 1"));
+            }
+            if options.ngeneration == 0 {
+                return Err(anyhow!("Number of each generation must be greater than 0"));
+            }
+        }
     }
 
-    ThreadPoolBuilder::new()
-        .num_threads(args.parallelism)
-        .thread_name(|x| format!("t{}", x))
-        .start_handler(|_| unsafe {
-            utils::block(SIGQUIT);
+    let metadata = fs::read_to_string(&args.metadata)
+        .map_err(|_| Error::FileNotFound(args.metadata.clone()))?;
+    let metadata =
+        serde_json::from_str::<Metadata>(&metadata).map_err(|_| Error::InvalidMetadata)?;
+
+    let autotuner = Autotuner::new(&args.sources, metadata)?;
+    let state = args
+        .continue_
+        .as_ref()
+        .map(|filename| {
+            let content =
+                fs::read_to_string(filename).map_err(|_| Error::FileNotFound(filename.clone()))?;
+            serde_json::from_str::<SavedState>(&content).map_err(|_| Error::InvalidSaveFile)
         })
-        .build_global()?;
+        .transpose()?;
+    match autotuner.run(
+        &args.direction,
+        &args.strategy,
+        &args.criterion,
+        args.repetition,
+        args.candidates,
+        state,
+        args.verbose,
+    ) {
+        Ok(mut instances) => {
+            instances.sort_by(|a, b| a.1.total_cmp(&b.1));
 
-    let cores = core_affinity::get_core_ids().unwrap();
-    let num_cores = cores.len();
-
-    let metadata = serde_json::from_str::<Metadata>(
-        &fs::read_to_string(args.metadata).expect("Failed to read kernel metadata file"),
-    )
-    .expect("Failed to parse kernel metadata");
-
-    let saved_state = args.continue_.map(|filename| {
-        let content = fs::read_to_string(filename).expect("Failed to read saved state file");
-        serde_json::from_str::<SavedState>(&content).expect("Failed to parse saved state file")
-    });
-
-    let mut i = 0;
-    let mut instances = Vec::new();
-    let mut results = Results::new(args.direction, args.candidates);
-    if let Some(saved_state) = saved_state {
-        i = saved_state.i;
-        for parameters in saved_state.instances {
-            instances.push(Arc::new(Instance::new(
-                metadata.profile.clone(),
-                parameters,
-            )));
+            fs::write(
+                args.output,
+                serde_json::to_string_pretty(&instances).expect("Failed to serialize instances"),
+            )
+            .expect("Failed to write results to file");
         }
-        for (parameters, fitness) in saved_state.results {
-            let instance = Arc::new(Instance::new(metadata.profile.clone(), parameters));
-            results.push(instance, fitness);
+        Err(Error::Saved(saved_state)) => {
+            let filename = format!(
+                "saved_state.{}",
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            );
+            fs::write(
+                &filename,
+                serde_json::to_string(&saved_state).expect("Failed to serialize instances"),
+            )
+            .expect("Failed to write current state to file");
+
+            println!("Saved current state to {}", filename);
+        }
+        e => {
+            e?;
         }
     }
-
-    for _ in instances.len()..args.initial {
-        let instance = metadata.profile.random();
-        instances.push(Arc::new(instance));
-    }
-
-    let runner = Runner::new(args.sources, metadata, args.parallelism)?;
-
-    let is_canceled = ManuallyMove::new(false);
-    let sigquit_handler = unsafe {
-        let is_canceled = is_canceled.clone();
-        register(SIGQUIT, move || {
-            let mut is_canceled = is_canceled.mov();
-            *is_canceled = true;
-        })
-    };
-
-    let mut evaluation_results: Vec<(f64, usize)> = Vec::with_capacity(args.initial);
-    let mut rng = rand::rng();
-    while i < args.limit {
-        if !evaluation_results.is_empty() {
-            let min = evaluation_results
-                .iter()
-                .filter(|(x, _)| !x.is_infinite())
-                .fold(f64::INFINITY, |a, &b| a.min(b.0));
-            let max = evaluation_results
-                .iter()
-                .filter(|(x, _)| !x.is_infinite())
-                .fold(f64::NEG_INFINITY, |a, &b| a.max(b.0));
-            println!("min = {}, max = {}", min, max);
-
-            let mut inversed = evaluation_results.clone();
-            for pair in &mut inversed {
-                if pair.0.is_infinite() {
-                    pair.0 = max;
-                    continue;
-                }
-
-                pair.0 = match args.direction {
-                    Direction::Minimize => pair.0,
-                    Direction::Maximize => max - pair.0,
-                };
-            }
-            inversed.shuffle(&mut rng);
-            let holes = stochastic_universal_sampling(&inversed, args.ngeneration);
-            drop(inversed);
-
-            for result in &mut evaluation_results {
-                if result.0.is_infinite() {
-                    result.0 = min;
-                    continue;
-                }
-
-                result.0 = match args.direction {
-                    Direction::Minimize => max - result.0,
-                    Direction::Maximize => result.0,
-                };
-            }
-            evaluation_results.shuffle(&mut rng);
-
-            let mut children = Vec::with_capacity(args.ngeneration);
-            for _ in 0..args.ngeneration {
-                let result = stochastic_universal_sampling(&evaluation_results, 2);
-                let child = Instance::crossover(&instances[result[0]], &instances[result[1]]);
-                let child = child.mutate();
-                children.push(child);
-            }
-
-            for (index, instance) in children.into_iter().enumerate() {
-                instances[holes[index]] = Arc::new(instance);
-            }
-
-            evaluation_results.clear();
-        }
-
-        println!("#{}", i + 1);
-
-        let len = instances.len();
-        let mut fresh_instances = Vec::new();
-        for index in 0..len {
-            fresh_instances.push((index, instances[index].clone()));
-        }
-
-        let len = fresh_instances.len();
-        for i in 0..utils::round_up(len, args.parallelism) {
-            let chunk: Vec<anyhow::Result<(f64, usize)>> = fresh_instances
-                [(i * args.parallelism)..((i + 1) * args.parallelism).min(len)]
-                .par_iter()
-                .map(|(i, instance)| {
-                    let tid = rayon::current_thread_index().unwrap_or(0);
-                    let index = tid
-                        + args.parallelism * rand::random_range(0..(num_cores / args.parallelism));
-                    core_affinity::set_for_current(cores[index]);
-
-                    let instance = instance.clone();
-                    Ok(match runner.evaluate(&instance, args.repetition) {
-                        Ok(mut values) => {
-                            let value = match args.criterion {
-                                Criterion::Maximum => {
-                                    values.into_iter().fold(f64::NEG_INFINITY, |a, b| a.max(b))
-                                }
-                                Criterion::Minimum => {
-                                    values.into_iter().fold(f64::INFINITY, |a, b| a.min(b))
-                                }
-                                Criterion::Median => {
-                                    values.sort_by(|a, b| a.total_cmp(b));
-                                    values[values.len() / 2]
-                                }
-                            };
-                            (value, *i)
-                        }
-                        Err(_) => (f64::INFINITY, *i),
-                    })
-                })
-                .collect();
-
-            for result in chunk {
-                let result = result?;
-                println!("{} ms", result.0);
-                results.push(instances[result.1].clone(), result.0);
-                evaluation_results.push(result);
-            }
-
-            if *is_canceled {
-                break;
-            }
-        }
-
-        if *is_canceled {
-            break;
-        }
-
-        i += 1;
-    }
-
-    // The signal handler must be unregistered early enough.
-    if let Ok(sigquit_handler) = sigquit_handler {
-        unregister(sigquit_handler);
-    }
-
-    drop(runner);
-
-    if *is_canceled {
-        let filename = format!(
-            "saved_state.{}",
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        let saved_state = SavedState::new(i, &instances, &results);
-        fs::write(
-            &filename,
-            serde_json::to_string(&saved_state).expect("Failed to serialize instances"),
-        )
-        .expect("Failed to write current state to file");
-
-        println!("Saved current state to {}", filename);
-    } else {
-        drop(evaluation_results);
-        drop(instances);
-
-        let mut instances = results
-            .iter()
-            .map(|(instance, fitness)| (format!("{}", instance), *fitness))
-            .collect::<Vec<_>>();
-        drop(results);
-        instances.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-        fs::write(
-            args.output,
-            serde_json::to_string_pretty(&instances).expect("Failed to serialize instances"),
-        )
-        .expect("Failed to write results to file");
-    }
-
-    ManuallyMove::drop(is_canceled);
 
     Ok(())
 }

@@ -2,7 +2,6 @@ use argh::FromArgValue;
 use autotuner::parameter::Instance;
 use std::{cmp, collections::BinaryHeap, result, sync::Arc};
 
-#[derive(Clone, Copy)]
 pub(crate) enum Direction {
     Minimize,
     Maximize,
@@ -46,7 +45,7 @@ enum Heap<T: Ord> {
 }
 
 impl<T: Ord> Heap<T> {
-    fn new(direction: Direction) -> Self {
+    fn new(direction: &Direction) -> Self {
         match direction {
             Direction::Minimize => Heap::Min(BinaryHeap::new()),
             Direction::Maximize => Heap::Max(BinaryHeap::new()),
@@ -88,7 +87,7 @@ pub(crate) struct Results {
 }
 
 impl Results {
-    pub(crate) fn new(direction: Direction, size: usize) -> Self {
+    pub(crate) fn new(direction: &Direction, size: usize) -> Self {
         Results {
             heap: Heap::new(direction),
             size,

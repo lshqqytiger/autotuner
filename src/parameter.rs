@@ -1,9 +1,7 @@
 use crate::interner::Intern;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap, convert::Infallible, fmt::Display, hash::Hash, str::FromStr, sync::Arc,
-};
+use std::{collections::BTreeMap, convert::Infallible, hash::Hash, str::FromStr, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
 pub enum Range {
@@ -43,7 +41,7 @@ impl ToString for IntegerTransformer {
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum Parameter {
+pub enum Specification {
     Integer {
         transformer: Option<IntegerTransformer>,
         range: Range,
@@ -54,40 +52,90 @@ pub enum Parameter {
     },
 }
 
-impl Parameter {
+impl Specification {
     pub const TYPES: [&str; 3] = ["Integer", "Switch", "Keyword"];
 
-    pub fn random(&self) -> Code {
+    pub fn default(&self) -> Value {
         match self {
-            Parameter::Integer {
+            Specification::Integer {
                 transformer: _,
                 range,
-            } => Code::Integer(range.random()),
-            Parameter::Switch => Code::Switch(rand::random()),
-            Parameter::Keyword { options } => Code::Keyword(rand::random_range(0..options.len())),
+            } => Value::Integer(match range {
+                Range::Sequence(start, _) => *start,
+            }),
+            Specification::Switch => Value::Switch(false),
+            Specification::Keyword { options: _ } => Value::Keyword(0),
         }
     }
 
-    fn crossover(&self, a: &Code, b: &Code) -> Code {
+    pub fn random(&self) -> Value {
+        match self {
+            Specification::Integer {
+                transformer: _,
+                range,
+            } => Value::Integer(range.random()),
+            Specification::Switch => Value::Switch(rand::random()),
+            Specification::Keyword { options } => {
+                Value::Keyword(rand::random_range(0..options.len()))
+            }
+        }
+    }
+
+    pub fn next(&self, current: &Value) -> Option<Value> {
+        match (self, current) {
+            (
+                Specification::Integer {
+                    transformer: _,
+                    range,
+                },
+                Value::Integer(n),
+            ) => match range {
+                Range::Sequence(_, end) => {
+                    if *n < *end {
+                        Some(Value::Integer(n + 1))
+                    } else {
+                        None
+                    }
+                }
+            },
+            (Specification::Switch, Value::Switch(b)) => {
+                if !*b {
+                    Some(Value::Switch(true))
+                } else {
+                    None
+                }
+            }
+            (Specification::Keyword { options }, Value::Keyword(i)) => {
+                if *i + 1 < options.len() {
+                    Some(Value::Keyword(i + 1))
+                } else {
+                    None
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn crossover(&self, a: &Value, b: &Value) -> Value {
         match (self, a, b) {
             (
-                Parameter::Integer {
+                Specification::Integer {
                     transformer: _,
                     range: _,
                 },
-                Code::Integer(a),
-                Code::Integer(b),
-            ) => Code::Integer((*a + *b) / 2),
-            (Parameter::Switch, Code::Switch(a), Code::Switch(b)) => {
+                Value::Integer(a),
+                Value::Integer(b),
+            ) => Value::Integer((*a + *b) / 2),
+            (Specification::Switch, Value::Switch(a), Value::Switch(b)) => {
                 if *a == *b {
-                    Code::Switch(*a)
+                    Value::Switch(*a)
                 } else {
-                    Code::Switch(rand::random())
+                    Value::Switch(rand::random())
                 }
             }
-            (Parameter::Keyword { options: _ }, Code::Keyword(a), Code::Keyword(b)) => {
+            (Specification::Keyword { options: _ }, Value::Keyword(a), Value::Keyword(b)) => {
                 if *a == *b {
-                    Code::Keyword(*a)
+                    Value::Keyword(*a)
                 } else {
                     self.random()
                 }
@@ -96,14 +144,14 @@ impl Parameter {
         }
     }
 
-    fn mutate(&self, code: &mut Code) {
+    pub fn mutate(&self, code: &mut Value) {
         match (self, code) {
             (
-                Parameter::Integer {
+                Specification::Integer {
                     transformer: _,
                     range,
                 },
-                Code::Integer(n),
+                Value::Integer(n),
             ) => {
                 // 10% chance to completely randomize the value
                 if rand::random_bool(0.1) {
@@ -128,7 +176,7 @@ impl Parameter {
                     }
                 }
             }
-            (Parameter::Switch, Code::Switch(b)) => {
+            (Specification::Switch, Value::Switch(b)) => {
                 // 10% chance to completely randomize the switch
                 if rand::random_bool(0.1) {
                     *b = rand::random();
@@ -140,7 +188,7 @@ impl Parameter {
                     *b = !*b;
                 }
             }
-            (Parameter::Keyword { options }, Code::Keyword(i)) => {
+            (Specification::Keyword { options }, Value::Keyword(i)) => {
                 // 20% chance to change the keyword
                 if rand::random_bool(0.2) {
                     *i = rand::random_range(0..options.len());
@@ -152,115 +200,60 @@ impl Parameter {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub enum Code {
+pub enum Value {
     Integer(i32),
     Switch(bool),
     Keyword(usize),
 }
 
-impl ToString for Code {
+impl ToString for Value {
     fn to_string(&self) -> String {
         match self {
-            Code::Integer(n) => format!("{}", n),
-            Code::Switch(b) => format!("{}", if *b { "true" } else { "false" }),
-            Code::Keyword(i) => format!("{}", i),
+            Value::Integer(n) => format!("{}", n),
+            Value::Switch(b) => format!("{}", if *b { "true" } else { "false" }),
+            Value::Keyword(i) => format!("{}", i),
         }
     }
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Profile(BTreeMap<Arc<str>, Parameter>);
+pub struct Profile(pub BTreeMap<Arc<str>, Arc<Specification>>);
 
 impl Profile {
-    pub fn new(profile: BTreeMap<Arc<str>, Parameter>) -> Arc<Self> {
-        Arc::new(Profile(profile))
+    pub fn new(profile: BTreeMap<Arc<str>, Arc<Specification>>) -> Self {
+        Profile(profile)
     }
 
-    pub fn random(self: &Arc<Profile>) -> Instance {
-        Instance::new(
-            self.clone(),
-            self.0
-                .iter()
-                .map(|(name, parameter)| (name.clone(), parameter.random()))
-                .collect::<BTreeMap<Arc<str>, Code>>(),
-        )
-    }
-
-    fn get_unchecked(&self, name: &str) -> &Parameter {
-        self.0.get(name).unwrap()
-    }
-}
-
-pub struct Instance {
-    pub id: Arc<str>,
-    profile: Arc<Profile>,
-    pub parameters: BTreeMap<Arc<str>, Code>,
-}
-
-impl Instance {
-    pub fn new(profile: Arc<Profile>, parameters: BTreeMap<Arc<str>, Code>) -> Self {
-        Instance {
-            id: Sha256::digest(serde_json::to_vec(&parameters).unwrap())
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
-                .intern(),
-            profile,
-            parameters,
-        }
-    }
-
-    pub fn crossover(a: &Instance, b: &Instance) -> Instance {
-        let mut parameters = BTreeMap::new();
-        for parameter in &a.parameters {
-            parameters.insert(
-                parameter.0.clone(),
-                a.profile
-                    .get_unchecked(parameter.0)
-                    .crossover(&a.parameters[parameter.0], &b.parameters[parameter.0]),
-            );
-        }
-        Instance::new(a.profile.clone(), parameters)
-    }
-
-    pub fn mutate(self) -> Instance {
-        let mut parameters = self.parameters.clone();
-        for (name, parameter) in &mut parameters {
-            self.profile.get_unchecked(&name).mutate(parameter);
-        }
-        Instance::new(self.profile.clone(), parameters)
-    }
-
-    pub fn compiler_arguments(&self) -> Vec<String> {
+    pub fn compiler_arguments(&self, instance: &Instance) -> Vec<String> {
         let mut arguments = Vec::new();
-        for (name, code) in &self.parameters {
-            match (self.profile.get_unchecked(name), code) {
+        for (name, value) in &instance.parameters {
+            match (self.0.get(name).unwrap().as_ref(), value) {
                 (
-                    Parameter::Integer {
+                    Specification::Integer {
                         transformer: Some(transformer),
                         range: _,
                     },
-                    Code::Integer(x),
+                    Value::Integer(x),
                 ) => {
                     arguments.push(format!("-D{}=({})", name, transformer.apply(x)));
                 }
                 (
-                    Parameter::Integer {
+                    Specification::Integer {
                         transformer: None,
                         range: _,
                     },
-                    Code::Integer(x),
+                    Value::Integer(x),
                 ) => {
                     arguments.push(format!("-D{}={}", name, x));
                 }
 
-                (Parameter::Switch, Code::Switch(x)) => {
+                (Specification::Switch, Value::Switch(x)) => {
                     if *x {
                         arguments.push(format!("-D{}", name));
                     }
                 }
 
-                (Parameter::Keyword { options }, Code::Keyword(i)) => {
+                (Specification::Keyword { options }, Value::Keyword(i)) => {
                     arguments.push(format!("-D{}={}", name, options[*i]));
                 }
 
@@ -268,6 +261,84 @@ impl Instance {
             }
         }
         arguments
+    }
+
+    pub fn display(&self, instance: &Instance) -> String {
+        instance
+            .parameters
+            .iter()
+            .map(|(name, value)| {
+                let value = match (self.0.get(name).unwrap().as_ref(), value) {
+                    (
+                        Specification::Integer {
+                            transformer: Some(transformer),
+                            range: _,
+                        },
+                        Value::Integer(x),
+                    ) => transformer.apply(x),
+                    (
+                        Specification::Integer {
+                            transformer: None,
+                            range: _,
+                        },
+                        Value::Integer(x),
+                    ) => x.to_string(),
+
+                    (Specification::Switch, Value::Switch(x)) => x.to_string(),
+
+                    (Specification::Keyword { options }, Value::Keyword(i)) => options[*i].clone(),
+
+                    _ => unreachable!(),
+                };
+                format!("{}={}", name, value)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+pub struct Instance {
+    pub id: Arc<str>,
+    pub parameters: BTreeMap<Arc<str>, Value>,
+}
+
+impl Serialize for Instance {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut pairs = Vec::new();
+        for (name, code) in &self.parameters {
+            pairs.push((name.to_string(), code));
+        }
+        pairs.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Instance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let pairs = Vec::<(String, Value)>::deserialize(deserializer)?;
+        let mut parameters = BTreeMap::new();
+        for (name, code) in pairs {
+            parameters.insert(name.intern(), code);
+        }
+        Ok(Instance::new(parameters))
+    }
+}
+
+impl Instance {
+    pub fn new(parameters: BTreeMap<Arc<str>, Value>) -> Self {
+        Instance {
+            id: Sha256::digest(serde_json::to_vec(&parameters).unwrap())
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+                .intern(),
+            parameters,
+        }
     }
 }
 
@@ -282,43 +353,5 @@ impl Eq for Instance {}
 impl Hash for Instance {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
-    }
-}
-
-impl Display for Instance {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.parameters
-                .iter()
-                .map(|(name, value)| {
-                    let value = match (self.profile.get_unchecked(name), value) {
-                        (
-                            Parameter::Integer {
-                                transformer: Some(transformer),
-                                range: _,
-                            },
-                            Code::Integer(x),
-                        ) => transformer.apply(x),
-                        (
-                            Parameter::Integer {
-                                transformer: None,
-                                range: _,
-                            },
-                            Code::Integer(x),
-                        ) => x.to_string(),
-
-                        (Parameter::Switch, Code::Switch(x)) => x.to_string(),
-
-                        (Parameter::Keyword { options }, Code::Keyword(i)) => options[*i].clone(),
-
-                        _ => unreachable!(),
-                    };
-                    format!("{}={}", name, value)
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
     }
 }

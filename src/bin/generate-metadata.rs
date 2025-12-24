@@ -1,10 +1,10 @@
 use autotuner::{
     interner::Intern,
     metadata::Metadata,
-    parameter::{IntegerTransformer, Parameter, Profile, Range},
+    parameter::{IntegerTransformer, Profile, Range, Specification},
 };
 use inquire::{CustomType, Select, Text, validator::Validation};
-use std::{collections::BTreeMap, fs};
+use std::{collections::BTreeMap, fs, sync::Arc};
 
 #[cfg(target_arch = "aarch64")]
 const DEFAULT_COMPILER: &str = "armclang";
@@ -21,7 +21,7 @@ fn main() -> anyhow::Result<()> {
             break;
         }
 
-        let typ = Select::new("Parameter type", Parameter::TYPES.to_vec()).prompt()?;
+        let typ = Select::new("Parameter type", Specification::TYPES.to_vec()).prompt()?;
         let parameter = match typ {
             "Integer" => {
                 let range = match Select::new("Range Type", vec!["Sequence"]).prompt()? {
@@ -47,9 +47,9 @@ fn main() -> anyhow::Result<()> {
                         .with_help_message("Enter a formulaic form of the parameter (optional)")
                         .prompt_skippable()?;
 
-                Parameter::Integer { transformer, range }
+                Specification::Integer { transformer, range }
             }
-            "Switch" => Parameter::Switch,
+            "Switch" => Specification::Switch,
             "Keyword" => {
                 let mut options = Vec::new();
                 loop {
@@ -67,11 +67,11 @@ fn main() -> anyhow::Result<()> {
                     }
                     break;
                 }
-                Parameter::Keyword { options }
+                Specification::Keyword { options }
             }
             _ => unreachable!(),
         };
-        profile.insert(name.intern(), parameter);
+        profile.insert(name.intern(), Arc::new(parameter));
     }
 
     let profile = Profile::new(profile);
