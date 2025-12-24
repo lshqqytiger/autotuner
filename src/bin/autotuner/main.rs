@@ -65,7 +65,7 @@ struct Options {
     /// output file (default: results.json)
     output: String,
 
-    #[argh(option, short = 'v', default = "false")]
+    #[argh(switch, short = 'v')]
     /// verbose output
     verbose: bool,
 }
