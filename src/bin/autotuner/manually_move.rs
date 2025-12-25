@@ -12,8 +12,8 @@ impl<T: Sized> ManuallyMove<T> {
         ManuallyMove(self.0)
     }
 
-    pub(crate) fn leak<'a>(self) -> &'a mut T {
-        unsafe { &mut *Box::leak(Box::from_raw(self.0)) }
+    pub(crate) fn drop(self) {
+        drop(unsafe { Box::from_raw(self.0) });
     }
 }
 

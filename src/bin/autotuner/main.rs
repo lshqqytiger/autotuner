@@ -1,16 +1,16 @@
 mod compile;
-mod error;
 mod helper;
 mod manually_move;
 mod results;
+mod union;
 mod utils;
 mod workspace;
 
 use crate::{
-    error::Error,
     helper::*,
     manually_move::ManuallyMove,
     results::{Direction, Results},
+    union::Union,
     workspace::Workspace,
 };
 use anyhow::anyhow;
@@ -26,6 +26,19 @@ use serde::{Deserialize, Serialize};
 use signal_hook_registry::{register, register_unchecked, unregister};
 use std::{fs, process, ptr, sync::Arc, time::SystemTime};
 use tempdir::TempDir;
+
+trait OrNull<T> {
+    fn or_null(self) -> *mut T;
+}
+
+impl<T> OrNull<T> for Option<*mut T> {
+    fn or_null(self) -> *mut T {
+        match self {
+            Some(ptr) => ptr,
+            None => ptr::null_mut(),
+        }
+    }
+}
 
 #[derive(FromArgs)]
 /// CLI Arguments
@@ -130,15 +143,11 @@ impl Criterion {
 }
 
 #[derive(Serialize, Deserialize)]
-struct ExhaustiveSearchState {
-    iter: utils::exhaustive::Iter,
-}
+struct ExhaustiveSearchState(utils::exhaustive::Iter);
 
 impl ExhaustiveSearchState {
     fn new(profile: &Profile) -> Self {
-        ExhaustiveSearchState {
-            iter: utils::exhaustive::Iter::from(profile),
-        }
+        ExhaustiveSearchState(utils::exhaustive::Iter::from(profile))
     }
 }
 
@@ -188,26 +197,23 @@ struct Autotuner<'s> {
 }
 
 impl<'s> Autotuner<'s> {
-    fn new(sources: &'s [String], metadata: Metadata) -> Result<Self, Error> {
-        let temp_dir = TempDir::new("autotuner").expect("Failed to create temporary directory");
+    fn new(sources: &'s [String], metadata: Metadata) -> anyhow::Result<Self> {
+        let temp_dir = TempDir::new("autotuner")?;
         let path = temp_dir.path().join("base");
         let base = compile::compile(
             &metadata.compiler,
             &path,
             sources.iter().chain(metadata.compiler_arguments.iter()),
-        )
-        .expect("Failed to compile base library");
-        let workspace = Workspace::new(&base, &metadata).expect("Failed to create workspace");
+        )?;
+        let workspace = Workspace::new(&base, &metadata)?;
 
-        let autotuner = Autotuner {
+        Ok(Autotuner {
             sources,
             metadata,
             temp_dir,
             base,
             workspace,
-        };
-
-        Ok(autotuner)
+        })
     }
 
     fn run(
@@ -219,7 +225,7 @@ impl<'s> Autotuner<'s> {
         candidates: usize,
         state: Option<SavedState>,
         verbose: bool,
-    ) -> Result<Vec<(String, f64)>, Error> {
+    ) -> Union<Vec<(String, f64)>, SavedState> {
         let is_canceled = ManuallyMove::new(false);
         let sigquit_handler = unsafe {
             let is_canceled = is_canceled.clone();
@@ -229,9 +235,8 @@ impl<'s> Autotuner<'s> {
             })
         };
 
-        let mut saved_state: Option<SavedState> = None;
         let mut results = Results::new(direction, candidates);
-        match strategy {
+        let saved_state = match strategy {
             Strategy::Exhaustive(_) => {
                 let mut state = if let Some(SavedState::Exhaustive(state)) = state {
                     state
@@ -239,7 +244,7 @@ impl<'s> Autotuner<'s> {
                     ExhaustiveSearchState::new(&self.metadata.profile)
                 };
 
-                for instance in &mut state.iter {
+                for instance in &mut state.0 {
                     unsafe {
                         utils::block(SIGQUIT);
                     }
@@ -264,9 +269,14 @@ impl<'s> Autotuner<'s> {
                     }
 
                     if *is_canceled {
-                        saved_state = Some(state.into());
                         break;
                     }
+                }
+
+                if *is_canceled {
+                    Some(state.into())
+                } else {
+                    None
                 }
             }
             Strategy::Genetic(options) => {
@@ -358,13 +368,9 @@ impl<'s> Autotuner<'s> {
                             utils::block(SIGQUIT);
                         }
 
+                        print!("Evaluating kernel {}/{}: ", i + 1, len);
                         if verbose {
-                            println!(
-                                "Evaluating kernel {}/{}: {}",
-                                i + 1,
-                                len,
-                                self.metadata.profile.display(&fresh_instances[i].1)
-                            );
+                            println!("{}", self.metadata.profile.display(&fresh_instances[i].1));
                         }
 
                         let result = match self.evaluate(&fresh_instances[i].1, repetition) {
@@ -385,48 +391,46 @@ impl<'s> Autotuner<'s> {
                     }
 
                     if *is_canceled {
-                        saved_state = Some(state.into());
                         break;
                     }
 
                     state.generation += 1;
                 }
+
+                if *is_canceled {
+                    Some(state.into())
+                } else {
+                    None
+                }
             }
-        }
+        };
+
+        ManuallyMove::drop(is_canceled);
 
         // The signal handler must be unregistered early enough.
         if let Ok(sigquit_handler) = sigquit_handler {
             unregister(sigquit_handler);
         }
 
-        if let Some(Ok(finalizer)) = self
-            .metadata
-            .finalizer
-            .as_ref()
-            .map(|name| unsafe { self.base.get::<Finalizer>(name.as_bytes()) })
-        {
-            let validation_ptr = if let Some(ptr) = self.workspace.validation_ptr {
-                ptr
-            } else {
-                ptr::null_mut()
-            };
+        if let Some(ref name) = self.metadata.finalizer {
             unsafe {
+                let finalizer = self.base.get::<Finalizer>(name.as_bytes()).unwrap();
                 finalizer(
                     self.workspace.input_ptr,
                     self.workspace.output_ptr,
-                    validation_ptr,
+                    self.workspace.validation_ptr.or_null(),
                 );
             }
         }
 
-        if *is_canceled.leak() {
-            Err(Error::Saved(saved_state.unwrap()))
+        if let Some(saved_state) = saved_state {
+            Union::Second(saved_state)
         } else {
             let instances = results
                 .iter()
                 .map(|(instance, fitness)| (self.metadata.profile.display(instance), *fitness))
                 .collect::<Vec<_>>();
-            Ok(instances)
+            Union::First(instances)
         }
     }
 
@@ -490,21 +494,15 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let metadata = fs::read_to_string(&args.metadata)
-        .map_err(|_| Error::FileNotFound(args.metadata.clone()))?;
+    let metadata = fs::read_to_string(&args.metadata).expect("Failed to read metadata file");
     let metadata =
-        serde_json::from_str::<Metadata>(&metadata).map_err(|_| Error::InvalidMetadata)?;
+        serde_json::from_str::<Metadata>(&metadata).expect("Failed to parse metadata file");
 
     let autotuner = Autotuner::new(&args.sources, metadata)?;
-    let state = args
-        .continue_
-        .as_ref()
-        .map(|filename| {
-            let content =
-                fs::read_to_string(filename).map_err(|_| Error::FileNotFound(filename.clone()))?;
-            serde_json::from_str::<SavedState>(&content).map_err(|_| Error::InvalidSaveFile)
-        })
-        .transpose()?;
+    let state = args.continue_.as_ref().map(|filename| {
+        let content = fs::read_to_string(filename).expect("Failed to read saved state file");
+        serde_json::from_str::<SavedState>(&content).expect("Failed to parse saved state file")
+    });
     match autotuner.run(
         &args.direction,
         &args.strategy,
@@ -514,16 +512,15 @@ fn main() -> anyhow::Result<()> {
         state,
         args.verbose,
     ) {
-        Ok(mut instances) => {
+        Union::First(mut instances) => {
             instances.sort_by(|a, b| a.1.total_cmp(&b.1));
-
             fs::write(
                 args.output,
                 serde_json::to_string_pretty(&instances).expect("Failed to serialize instances"),
             )
             .expect("Failed to write results to file");
         }
-        Err(Error::Saved(saved_state)) => {
+        Union::Second(saved_state) => {
             let filename = format!(
                 "saved_state.{}",
                 SystemTime::now()
@@ -536,11 +533,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::to_string(&saved_state).expect("Failed to serialize instances"),
             )
             .expect("Failed to write current state to file");
-
             println!("Saved current state to {}", filename);
-        }
-        e => {
-            e?;
         }
     }
 
