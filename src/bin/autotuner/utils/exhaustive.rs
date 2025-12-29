@@ -2,20 +2,16 @@ use autotuner::parameter::{Instance, Profile, Specification, Value};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
-#[derive(Serialize, Deserialize)]
-pub(crate) struct Iter {
-    names: Vec<Arc<str>>,
-    values: Vec<Value>,
-    specifications: Vec<Arc<Specification>>,
-    done: bool,
+pub(crate) trait Exhaustive {
+    fn iter(&self) -> Iter;
 }
 
-impl From<&Profile> for Iter {
-    fn from(profile: &Profile) -> Self {
-        let names = profile.0.keys().cloned().collect::<Vec<Arc<str>>>();
+impl Exhaustive for Profile {
+    fn iter(&self) -> Iter {
+        let names = self.0.keys().cloned().collect::<Vec<Arc<str>>>();
         let specifications = names
             .iter()
-            .map(|name| profile.0.get(name).unwrap().clone())
+            .map(|name| self.0.get(name).unwrap().clone())
             .collect::<Vec<Arc<Specification>>>();
         let values = specifications
             .iter()
@@ -28,6 +24,14 @@ impl From<&Profile> for Iter {
             done: false,
         }
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Iter {
+    names: Vec<Arc<str>>,
+    values: Vec<Value>,
+    specifications: Vec<Arc<Specification>>,
+    done: bool,
 }
 
 impl Iterator for Iter {

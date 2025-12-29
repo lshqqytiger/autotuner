@@ -11,6 +11,7 @@ use crate::{
     manually_move::ManuallyMove,
     results::{Direction, Results},
     union::Union,
+    utils::exhaustive::Exhaustive,
     workspace::Workspace,
 };
 use anyhow::anyhow;
@@ -146,8 +147,8 @@ impl Criterion {
 struct ExhaustiveSearchState(utils::exhaustive::Iter);
 
 impl ExhaustiveSearchState {
-    fn new(profile: &Profile) -> Self {
-        ExhaustiveSearchState(utils::exhaustive::Iter::from(profile))
+    fn new(iter: utils::exhaustive::Iter) -> Self {
+        ExhaustiveSearchState(iter)
     }
 }
 
@@ -241,20 +242,16 @@ impl<'s> Autotuner<'s> {
                 let mut state = if let Some(SavedState::Exhaustive(state)) = state {
                     state
                 } else {
-                    ExhaustiveSearchState::new(&self.metadata.profile)
+                    ExhaustiveSearchState::new(self.metadata.profile.iter())
                 };
 
+                let mut count = 1;
                 for instance in &mut state.0 {
                     unsafe {
                         utils::block(SIGQUIT);
                     }
 
-                    if verbose {
-                        println!(
-                            "Evaluating kernel: {}",
-                            self.metadata.profile.display(&instance)
-                        );
-                    }
+                    println!("{}/{}: ", count, self.metadata.profile.len());
 
                     let result = match self.evaluate(&instance, repetition) {
                         Ok(values) => criterion.enforce(values),
@@ -262,6 +259,10 @@ impl<'s> Autotuner<'s> {
                     };
 
                     println!("{} ms", result);
+                    if verbose {
+                        println!("{}", self.metadata.profile.display(&instance));
+                    }
+                    println!();
                     results.push(Arc::new(instance), result);
 
                     unsafe {
@@ -271,6 +272,8 @@ impl<'s> Autotuner<'s> {
                     if *is_canceled {
                         break;
                     }
+
+                    count += 1;
                 }
 
                 if *is_canceled {
@@ -298,7 +301,13 @@ impl<'s> Autotuner<'s> {
                             .iter()
                             .filter(|(x, _)| !x.is_infinite())
                             .fold(f64::NEG_INFINITY, |a, &b| a.max(b.0));
-                        println!("min = {}, max = {}", min, max);
+                        println!("=== Generation #{} Summary ===", state.generation);
+                        if let Some(best) = results.best() {
+                            println!("Best overall: {} ms", best.1);
+                        }
+                        println!("Best: {} ms", min);
+                        println!("Worst: {} ms", max);
+                        println!();
 
                         let mut inversed = evaluation_results.clone();
                         for pair in &mut inversed {
@@ -354,8 +363,6 @@ impl<'s> Autotuner<'s> {
                         evaluation_results.clear();
                     }
 
-                    println!("#{}", state.generation + 1);
-
                     let len = state.instances.len();
                     let mut fresh_instances = Vec::new();
                     for index in 0..len {
@@ -368,16 +375,23 @@ impl<'s> Autotuner<'s> {
                             utils::block(SIGQUIT);
                         }
 
-                        print!("Evaluating kernel {}/{}: ", i + 1, len);
-                        if verbose {
-                            println!("{}", self.metadata.profile.display(&fresh_instances[i].1));
-                        }
+                        print!(
+                            "{}/{} {}/{}: ",
+                            state.generation + 1,
+                            options.ngeneration,
+                            i + 1,
+                            len
+                        );
 
                         let result = match self.evaluate(&fresh_instances[i].1, repetition) {
                             Ok(values) => criterion.enforce(values),
                             Err(_) => f64::INFINITY,
                         };
                         println!("{} ms", result);
+                        if verbose {
+                            println!("{}", self.metadata.profile.display(&fresh_instances[i].1));
+                        }
+                        println!();
                         results.push(state.instances[i].clone(), result);
                         evaluation_results.push((result, i));
 
@@ -428,7 +442,7 @@ impl<'s> Autotuner<'s> {
         } else {
             let instances = results
                 .iter()
-                .map(|(instance, fitness)| (self.metadata.profile.display(instance), *fitness))
+                .map(|result| (self.metadata.profile.display(&result.0), result.1))
                 .collect::<Vec<_>>();
             Union::First(instances)
         }

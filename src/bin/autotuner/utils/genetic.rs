@@ -1,5 +1,94 @@
-use autotuner::parameter::{Instance, Profile, Value};
+use autotuner::parameter::{Instance, Profile, Range, Specification, Value};
 use std::{collections::BTreeMap, sync::Arc};
+
+trait Genetic {
+    fn crossover(&self, a: &Value, b: &Value) -> Value;
+    fn mutate(&self, value: &mut Value);
+}
+
+impl Genetic for Specification {
+    fn crossover(&self, a: &Value, b: &Value) -> Value {
+        match (self, a, b) {
+            (
+                Specification::Integer {
+                    transformer: _,
+                    range: _,
+                },
+                Value::Integer(a),
+                Value::Integer(b),
+            ) => Value::Integer((*a + *b) / 2),
+            (Specification::Switch, Value::Switch(a), Value::Switch(b)) => {
+                if *a == *b {
+                    Value::Switch(*a)
+                } else {
+                    Value::Switch(rand::random())
+                }
+            }
+            (Specification::Keyword { options: _ }, Value::Keyword(a), Value::Keyword(b)) => {
+                if *a == *b {
+                    Value::Keyword(*a)
+                } else {
+                    self.random()
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn mutate(&self, code: &mut Value) {
+        match (self, code) {
+            (
+                Specification::Integer {
+                    transformer: _,
+                    range,
+                },
+                Value::Integer(n),
+            ) => {
+                // 10% chance to completely randomize the value
+                if rand::random_bool(0.1) {
+                    *n = range.random();
+                    return;
+                }
+
+                match range {
+                    Range::Sequence(start, end) => {
+                        // variation in -20% ~ +20%
+                        let mut variation = ((end - start) as f64 * 0.2) as i32;
+                        if variation == 0 {
+                            variation = 1;
+                        }
+                        *n += rand::random_range(-variation..=variation);
+
+                        if *n < *start {
+                            *n = *start;
+                        } else if *n > *end {
+                            *n = *end;
+                        }
+                    }
+                }
+            }
+            (Specification::Switch, Value::Switch(b)) => {
+                // 10% chance to completely randomize the switch
+                if rand::random_bool(0.1) {
+                    *b = rand::random();
+                    return;
+                }
+
+                // 20% chance to flip the switch
+                if rand::random_bool(0.2) {
+                    *b = !*b;
+                }
+            }
+            (Specification::Keyword { options }, Value::Keyword(i)) => {
+                // 20% chance to change the keyword
+                if rand::random_bool(0.2) {
+                    *i = rand::random_range(0..options.len());
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+}
 
 pub(crate) fn random(profile: &Profile) -> Instance {
     Instance::new(

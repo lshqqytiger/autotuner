@@ -17,7 +17,7 @@ impl FromArgValue for Direction {
     }
 }
 
-pub(crate) struct Result(Arc<Instance>, f64);
+pub(crate) struct Result(pub(crate) Arc<Instance>, pub(crate) f64);
 
 impl PartialEq for Result {
     fn eq(&self, other: &Self) -> bool {
@@ -112,7 +112,11 @@ impl Results {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Arc<Instance>, &f64)> {
-        self.heap.iter().map(|result| (&result.0, &result.1))
+    pub(crate) fn best(&self) -> Option<&Result> {
+        self.iter().min()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Result> {
+        self.heap.iter()
     }
 }
