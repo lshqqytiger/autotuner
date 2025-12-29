@@ -378,7 +378,7 @@ impl<'s> Autotuner<'s> {
                         print!(
                             "{}/{} {}/{}: ",
                             state.generation + 1,
-                            options.ngeneration,
+                            options.limit,
                             i + 1,
                             len
                         );
