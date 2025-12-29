@@ -1,7 +1,7 @@
 use autotuner::{
     interner::Intern,
     metadata::Metadata,
-    parameter::{IntegerTransformer, Profile, Range, Specification},
+    parameter::{IntegerSpace, IntegerTransformer, KeywordSpace, Profile, Specification},
 };
 use inquire::{CustomType, Select, Text, validator::Validation};
 use std::{collections::BTreeMap, fs, sync::Arc};
@@ -24,7 +24,12 @@ fn main() -> anyhow::Result<()> {
         let typ = Select::new("Parameter type", Specification::TYPES.to_vec()).prompt()?;
         let parameter = match typ {
             "Integer" => {
-                let range = match Select::new("Range Type", vec!["Sequence"]).prompt()? {
+                let space = match Select::new(
+                    "How to describe parameter space",
+                    IntegerSpace::TYPES.to_vec(),
+                )
+                .prompt()?
+                {
                     "Sequence" => {
                         let start: i32 = CustomType::<i32>::new("- Minimum").prompt()?;
                         let end: i32 = CustomType::<i32>::new("- Maximum")
@@ -38,7 +43,21 @@ fn main() -> anyhow::Result<()> {
                                 }
                             })
                             .prompt()?;
-                        Range::Sequence(start, end)
+                        IntegerSpace::Sequence(start, end)
+                    }
+                    "Candidates" => {
+                        let mut candidates = Vec::new();
+                        loop {
+                            if let Some(candidate) = CustomType::<i32>::new("- Candidate value")
+                                .with_help_message("Enter a candidate value (press ESC to finish)")
+                                .prompt_skippable()?
+                            {
+                                candidates.push(candidate);
+                                continue;
+                            }
+                            break;
+                        }
+                        IntegerSpace::Candidates(candidates)
                     }
                     _ => unreachable!(),
                 };
@@ -47,7 +66,7 @@ fn main() -> anyhow::Result<()> {
                         .with_help_message("Enter a formulaic form of the parameter (optional)")
                         .prompt_skippable()?;
 
-                Specification::Integer { transformer, range }
+                Specification::Integer { transformer, space }
             }
             "Switch" => Specification::Switch,
             "Keyword" => {
@@ -67,7 +86,7 @@ fn main() -> anyhow::Result<()> {
                     }
                     break;
                 }
-                Specification::Keyword { options }
+                Specification::Keyword(KeywordSpace(options))
             }
             _ => unreachable!(),
         };

@@ -1,32 +1,39 @@
-use autotuner::parameter::{Instance, Profile, Range, Specification, Value};
+use autotuner::parameter::{
+    Instance, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
 trait Genetic {
+    fn get_genetic_space(&self) -> &dyn GeneticSpace;
+}
+
+impl Genetic for Specification {
+    fn get_genetic_space(&self) -> &dyn GeneticSpace {
+        match self {
+            Specification::Integer {
+                transformer: _,
+                space,
+            } => space,
+            Specification::Switch => &Self::SWITCH_SPACE,
+            Specification::Keyword(options) => options,
+        }
+    }
+}
+
+trait GeneticSpace {
     fn crossover(&self, a: &Value, b: &Value) -> Value;
     fn mutate(&self, value: &mut Value);
 }
 
-impl Genetic for Specification {
+impl GeneticSpace for IntegerSpace {
     fn crossover(&self, a: &Value, b: &Value) -> Value {
         match (self, a, b) {
-            (
-                Specification::Integer {
-                    transformer: _,
-                    range: _,
-                },
-                Value::Integer(a),
-                Value::Integer(b),
-            ) => Value::Integer((*a + *b) / 2),
-            (Specification::Switch, Value::Switch(a), Value::Switch(b)) => {
-                if *a == *b {
-                    Value::Switch(*a)
-                } else {
-                    Value::Switch(rand::random())
-                }
+            (IntegerSpace::Sequence(_, _), Value::Integer(a), Value::Integer(b)) => {
+                Value::Integer((*a + *b) / 2)
             }
-            (Specification::Keyword { options: _ }, Value::Keyword(a), Value::Keyword(b)) => {
+            (IntegerSpace::Candidates(_), Value::Index(a), Value::Index(b)) => {
                 if *a == *b {
-                    Value::Keyword(*a)
+                    Value::Index(*a)
                 } else {
                     self.random()
                 }
@@ -37,55 +44,85 @@ impl Genetic for Specification {
 
     fn mutate(&self, code: &mut Value) {
         match (self, code) {
-            (
-                Specification::Integer {
-                    transformer: _,
-                    range,
-                },
-                Value::Integer(n),
-            ) => {
+            (IntegerSpace::Sequence(start, end), Value::Integer(n)) => {
                 // 10% chance to completely randomize the value
                 if rand::random_bool(0.1) {
-                    *n = range.random();
+                    *n = rand::random_range(*start..=*end);
                     return;
                 }
 
-                match range {
-                    Range::Sequence(start, end) => {
-                        // variation in -20% ~ +20%
-                        let mut variation = ((end - start) as f64 * 0.2) as i32;
-                        if variation == 0 {
-                            variation = 1;
-                        }
-                        *n += rand::random_range(-variation..=variation);
+                // variation in -20% ~ +20%
+                let mut variation = ((end - start) as f64 * 0.2) as i32;
+                if variation == 0 {
+                    variation = 1;
+                }
+                *n += rand::random_range(-variation..=variation);
 
-                        if *n < *start {
-                            *n = *start;
-                        } else if *n > *end {
-                            *n = *end;
-                        }
-                    }
+                if *n < *start {
+                    *n = *start;
+                } else if *n > *end {
+                    *n = *end;
                 }
             }
-            (Specification::Switch, Value::Switch(b)) => {
-                // 10% chance to completely randomize the switch
-                if rand::random_bool(0.1) {
-                    *b = rand::random();
-                    return;
-                }
-
-                // 20% chance to flip the switch
+            (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
+                // 20% chance
                 if rand::random_bool(0.2) {
-                    *b = !*b;
-                }
-            }
-            (Specification::Keyword { options }, Value::Keyword(i)) => {
-                // 20% chance to change the keyword
-                if rand::random_bool(0.2) {
-                    *i = rand::random_range(0..options.len());
+                    *i = rand::random_range(0..candidates.len());
                 }
             }
             _ => unreachable!(),
+        }
+    }
+}
+
+impl GeneticSpace for SwitchSpace {
+    fn crossover(&self, a: &Value, b: &Value) -> Value {
+        match (a, b) {
+            (Value::Switch(a), Value::Switch(b)) => {
+                if *a == *b {
+                    Value::Switch(*a)
+                } else {
+                    self.random()
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn mutate(&self, code: &mut Value) {
+        // 10% chance to completely randomize the switch
+        if rand::random_bool(0.1) {
+            *code = self.random();
+            return;
+        }
+
+        // 20% chance to flip the switch
+        if rand::random_bool(0.2) {
+            if let Value::Switch(b) = code {
+                *b = !*b;
+            }
+        }
+    }
+}
+
+impl GeneticSpace for KeywordSpace {
+    fn crossover(&self, a: &Value, b: &Value) -> Value {
+        match (a, b) {
+            (Value::Index(a), Value::Index(b)) => {
+                if *a == *b {
+                    Value::Index(*a)
+                } else {
+                    self.random()
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn mutate(&self, code: &mut Value) {
+        // 20% chance to change the keyword
+        if rand::random_bool(0.2) {
+            *code = self.random();
         }
     }
 }
@@ -95,7 +132,7 @@ pub(crate) fn random(profile: &Profile) -> Instance {
         profile
             .0
             .iter()
-            .map(|(name, parameter)| (name.clone(), parameter.random()))
+            .map(|(name, parameter)| (name.clone(), parameter.get_space().random()))
             .collect::<BTreeMap<Arc<str>, Value>>(),
     )
 }
@@ -109,6 +146,7 @@ pub(crate) fn crossover(profile: &Profile, a: &Instance, b: &Instance) -> Instan
                 .0
                 .get(parameter.0)
                 .unwrap()
+                .get_genetic_space()
                 .crossover(&a.parameters[parameter.0], &b.parameters[parameter.0]),
         );
     }
@@ -117,7 +155,12 @@ pub(crate) fn crossover(profile: &Profile, a: &Instance, b: &Instance) -> Instan
 
 pub(crate) fn mutate(profile: &Profile, instance: &mut Instance) {
     for (name, parameter) in &mut instance.parameters {
-        profile.0.get(name).unwrap().mutate(parameter);
+        profile
+            .0
+            .get(name)
+            .unwrap()
+            .get_genetic_space()
+            .mutate(parameter);
     }
 }
 

@@ -3,16 +3,133 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, convert::Infallible, hash::Hash, str::FromStr, sync::Arc};
 
-#[derive(Serialize, Deserialize)]
-pub enum Range {
-    Sequence(i32, i32),
+pub trait Space {
+    fn default(&self) -> Value;
+    fn random(&self) -> Value;
+    fn next(&self, current: &Value) -> Option<Value>;
+    fn len(&self) -> usize;
 }
 
-impl Range {
-    pub fn random(&self) -> i32 {
+#[derive(Serialize, Deserialize)]
+pub enum IntegerSpace {
+    Sequence(i32, i32),
+    Candidates(Vec<i32>),
+}
+
+impl Space for IntegerSpace {
+    #[inline]
+    fn default(&self) -> Value {
         match self {
-            Range::Sequence(start, end) => rand::random_range(*start..=*end),
+            IntegerSpace::Sequence(start, _) => Value::Integer(*start),
+            IntegerSpace::Candidates(_) => Value::Index(0),
         }
+    }
+
+    #[inline]
+    fn random(&self) -> Value {
+        match self {
+            IntegerSpace::Sequence(start, end) => Value::Integer(rand::random_range(*start..=*end)),
+            IntegerSpace::Candidates(candidates) => {
+                Value::Index(rand::random_range(0..candidates.len()))
+            }
+        }
+    }
+
+    fn next(&self, current: &Value) -> Option<Value> {
+        match (self, current) {
+            (IntegerSpace::Sequence(_, end), Value::Integer(n)) => {
+                if *n < *end {
+                    Some(Value::Integer(n + 1))
+                } else {
+                    None
+                }
+            }
+            (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
+                if *i + 1 < candidates.len() {
+                    Some(Value::Index(i + 1))
+                } else {
+                    None
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        match self {
+            IntegerSpace::Sequence(start, end) => (*end - *start + 1) as usize,
+            IntegerSpace::Candidates(candidates) => candidates.len(),
+        }
+    }
+}
+
+impl IntegerSpace {
+    pub const TYPES: [&'static str; 2] = ["Sequence", "Candidates"];
+}
+
+pub struct SwitchSpace {}
+
+impl Space for SwitchSpace {
+    #[inline]
+    fn default(&self) -> Value {
+        Value::Switch(false)
+    }
+
+    #[inline]
+    fn random(&self) -> Value {
+        Value::Switch(rand::random())
+    }
+
+    fn next(&self, current: &Value) -> Option<Value> {
+        match current {
+            Value::Switch(b) => {
+                if !*b {
+                    Some(Value::Switch(true))
+                } else {
+                    None
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        2
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct KeywordSpace(pub Vec<String>);
+
+impl Space for KeywordSpace {
+    #[inline]
+    fn default(&self) -> Value {
+        Value::Index(0)
+    }
+
+    #[inline]
+    fn random(&self) -> Value {
+        Value::Index(rand::random_range(0..self.0.len()))
+    }
+
+    fn next(&self, current: &Value) -> Option<Value> {
+        match current {
+            Value::Index(i) => {
+                if *i + 1 < self.0.len() {
+                    Some(Value::Index(i + 1))
+                } else {
+                    None
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -44,88 +161,25 @@ impl ToString for IntegerTransformer {
 pub enum Specification {
     Integer {
         transformer: Option<IntegerTransformer>,
-        range: Range,
+        space: IntegerSpace,
     },
     Switch,
-    Keyword {
-        options: Vec<String>,
-    },
+    Keyword(KeywordSpace),
 }
 
 impl Specification {
-    pub const TYPES: [&str; 3] = ["Integer", "Switch", "Keyword"];
+    pub const TYPES: [&'static str; 3] = ["Integer", "Switch", "Keyword"];
+    pub const SWITCH_SPACE: SwitchSpace = SwitchSpace {};
 
-    pub fn default(&self) -> Value {
+    #[inline]
+    pub fn get_space(&self) -> &dyn Space {
         match self {
             Specification::Integer {
                 transformer: _,
-                range,
-            } => Value::Integer(match range {
-                Range::Sequence(start, _) => *start,
-            }),
-            Specification::Switch => Value::Switch(false),
-            Specification::Keyword { options: _ } => Value::Keyword(0),
-        }
-    }
-
-    pub fn random(&self) -> Value {
-        match self {
-            Specification::Integer {
-                transformer: _,
-                range,
-            } => Value::Integer(range.random()),
-            Specification::Switch => Value::Switch(rand::random()),
-            Specification::Keyword { options } => {
-                Value::Keyword(rand::random_range(0..options.len()))
-            }
-        }
-    }
-
-    pub fn next(&self, current: &Value) -> Option<Value> {
-        match (self, current) {
-            (
-                Specification::Integer {
-                    transformer: _,
-                    range,
-                },
-                Value::Integer(n),
-            ) => match range {
-                Range::Sequence(_, end) => {
-                    if *n < *end {
-                        Some(Value::Integer(n + 1))
-                    } else {
-                        None
-                    }
-                }
-            },
-            (Specification::Switch, Value::Switch(b)) => {
-                if !*b {
-                    Some(Value::Switch(true))
-                } else {
-                    None
-                }
-            }
-            (Specification::Keyword { options }, Value::Keyword(i)) => {
-                if *i + 1 < options.len() {
-                    Some(Value::Keyword(i + 1))
-                } else {
-                    None
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            Specification::Integer {
-                transformer: _,
-                range,
-            } => match range {
-                Range::Sequence(start, end) => (*end - *start + 1) as usize,
-            },
-            Specification::Switch => 2,
-            Specification::Keyword { options } => options.len(),
+                space,
+            } => space,
+            Specification::Switch => &Self::SWITCH_SPACE,
+            Specification::Keyword(options) => options,
         }
     }
 }
@@ -134,7 +188,7 @@ impl Specification {
 pub enum Value {
     Integer(i32),
     Switch(bool),
-    Keyword(usize),
+    Index(usize),
 }
 
 impl ToString for Value {
@@ -142,7 +196,7 @@ impl ToString for Value {
         match self {
             Value::Integer(n) => format!("{}", n),
             Value::Switch(b) => format!("{}", if *b { "true" } else { "false" }),
-            Value::Keyword(i) => format!("{}", i),
+            Value::Index(i) => format!("{}", i),
         }
     }
 }
@@ -162,7 +216,7 @@ impl Profile {
                 (
                     Specification::Integer {
                         transformer: Some(transformer),
-                        range: _,
+                        space: IntegerSpace::Sequence(_, _),
                     },
                     Value::Integer(x),
                 ) => {
@@ -171,11 +225,27 @@ impl Profile {
                 (
                     Specification::Integer {
                         transformer: None,
-                        range: _,
+                        space: IntegerSpace::Sequence(_, _),
                     },
                     Value::Integer(x),
                 ) => {
                     arguments.push(format!("-D{}={}", name, x));
+                }
+                (
+                    Specification::Integer {
+                        transformer: Some(_),
+                        space: IntegerSpace::Candidates(_),
+                    },
+                    Value::Index(_),
+                ) => unimplemented!(),
+                (
+                    Specification::Integer {
+                        transformer: None,
+                        space: IntegerSpace::Candidates(candidates),
+                    },
+                    Value::Index(i),
+                ) => {
+                    arguments.push(format!("-D{}={}", name, candidates[*i]));
                 }
 
                 (Specification::Switch, Value::Switch(x)) => {
@@ -184,7 +254,7 @@ impl Profile {
                     }
                 }
 
-                (Specification::Keyword { options }, Value::Keyword(i)) => {
+                (Specification::Keyword(KeywordSpace(options)), Value::Index(i)) => {
                     arguments.push(format!("-D{}={}", name, options[*i]));
                 }
 
@@ -203,21 +273,37 @@ impl Profile {
                     (
                         Specification::Integer {
                             transformer: Some(transformer),
-                            range: _,
+                            space: IntegerSpace::Sequence(_, _),
                         },
                         Value::Integer(x),
                     ) => transformer.apply(x),
                     (
                         Specification::Integer {
                             transformer: None,
-                            range: _,
+                            space: IntegerSpace::Sequence(_, _),
                         },
                         Value::Integer(x),
                     ) => x.to_string(),
+                    (
+                        Specification::Integer {
+                            transformer: Some(_),
+                            space: IntegerSpace::Candidates(_),
+                        },
+                        Value::Index(_),
+                    ) => unimplemented!(),
+                    (
+                        Specification::Integer {
+                            transformer: None,
+                            space: IntegerSpace::Candidates(candidates),
+                        },
+                        Value::Index(i),
+                    ) => candidates[*i].to_string(),
 
                     (Specification::Switch, Value::Switch(x)) => x.to_string(),
 
-                    (Specification::Keyword { options }, Value::Keyword(i)) => options[*i].clone(),
+                    (Specification::Keyword(KeywordSpace(options)), Value::Index(i)) => {
+                        options[*i].clone()
+                    }
 
                     _ => unreachable!(),
                 };
@@ -230,7 +316,7 @@ impl Profile {
     pub fn len(&self) -> usize {
         let mut size = 1;
         for specification in self.0.values() {
-            size *= specification.len();
+            size *= specification.get_space().len();
         }
         size
     }

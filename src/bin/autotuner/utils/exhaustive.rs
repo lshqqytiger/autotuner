@@ -15,7 +15,7 @@ impl Exhaustive for Profile {
             .collect::<Vec<Arc<Specification>>>();
         let values = specifications
             .iter()
-            .map(|specification| specification.default())
+            .map(|specification| specification.get_space().default())
             .collect::<Vec<Value>>();
         Iter {
             names,
@@ -51,10 +51,14 @@ impl Iterator for Iter {
         let instance = Instance::new(parameters);
 
         for index in (0..self.values.len()).rev() {
-            if let Some(next_value) = self.specifications[index].next(&self.values[index]) {
+            if let Some(next_value) = self.specifications[index]
+                .get_space()
+                .next(&self.values[index])
+            {
                 self.values[index] = next_value;
                 for reset_index in index + 1..self.values.len() {
-                    self.values[reset_index] = self.specifications[reset_index].default();
+                    self.values[reset_index] =
+                        self.specifications[reset_index].get_space().default();
                 }
                 return Some(instance);
             }
