@@ -1,7 +1,56 @@
+use crate::ranking::Ranking;
 use autotuner::parameter::{
     Instance, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
-use std::{collections::BTreeMap, sync::Arc};
+use serde::{Deserialize, Serialize};
+use std::{collections::BTreeMap, fmt, sync::Arc};
+
+pub(crate) type Output = Ranking;
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SearchState {
+    pub(crate) generation: usize,
+    pub(crate) instances: Vec<Arc<Instance>>,
+}
+
+impl SearchState {
+    pub(crate) fn new(profile: &Profile, initial: usize) -> Self {
+        let mut instances = Vec::with_capacity(initial);
+        for _ in 0..initial {
+            instances.push(Arc::new(random(profile)));
+        }
+        SearchState {
+            generation: 0,
+            instances,
+        }
+    }
+}
+
+pub(crate) struct GenerationSummary {
+    pub(crate) best_overall: Option<f64>,
+    pub(crate) best: f64,
+    pub(crate) worst: f64,
+}
+
+impl fmt::Display for GenerationSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(best_overall) = self.best_overall {
+            writeln!(f, "Best overall: {} ms", best_overall)?;
+        }
+        writeln!(f, "Best: {} ms", self.best)?;
+        writeln!(f, "Worst: {} ms", self.worst)
+    }
+}
+
+impl GenerationSummary {
+    pub(crate) fn new(best_overall: Option<f64>, best: f64, worst: f64) -> Self {
+        GenerationSummary {
+            best_overall,
+            best,
+            worst,
+        }
+    }
+}
 
 trait Genetic {
     fn get_genetic_space(&self) -> &dyn GeneticSpace;

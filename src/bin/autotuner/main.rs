@@ -1,24 +1,20 @@
 mod compile;
+mod criterion;
+mod direction;
+mod evaluation_result;
 mod helper;
-mod manually_move;
-mod results;
-mod union;
+mod ranking;
 mod utils;
 mod workspace;
 
 use crate::{
-    helper::*,
-    manually_move::ManuallyMove,
-    results::{Direction, Results},
-    union::Union,
-    utils::exhaustive::Exhaustive,
+    criterion::Criterion, direction::Direction, helper::*, utils::exhaustive::Exhaustive,
     workspace::Workspace,
 };
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
 use autotuner::{
-    metadata::Metadata,
-    parameter::{Instance, Profile},
+    manually_move::ManuallyMove, metadata::Metadata, parameter::Instance, union::Union,
 };
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::{Library, Symbol};
@@ -37,6 +33,27 @@ impl<T> OrNull<T> for Option<*mut T> {
         match self {
             Some(ptr) => ptr,
             None => ptr::null_mut(),
+        }
+    }
+}
+
+impl FromArgValue for Direction {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        match value.to_lowercase().as_str() {
+            "minimize" => Ok(Direction::Minimize),
+            "maximize" => Ok(Direction::Maximize),
+            _ => Err(format!("Invalid direction: {}", value)),
+        }
+    }
+}
+
+impl FromArgValue for Criterion {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        match value.to_lowercase().as_str() {
+            "maximum" => Ok(Criterion::Maximum),
+            "minimum" => Ok(Criterion::Minimum),
+            "median" => Ok(Criterion::Median),
+            _ => Err(format!("Invalid criterion: {}", value)),
         }
     }
 }
@@ -104,6 +121,10 @@ struct GeneticSearchOptions {
     #[argh(option, short = 'l', default = "256")]
     /// maximum number of generations (default: 256)
     limit: usize,
+
+    #[argh(option)]
+    /// output file
+    history: Option<String>,
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
@@ -113,78 +134,20 @@ enum Strategy {
     Genetic(GeneticSearchOptions),
 }
 
-enum Criterion {
-    Maximum,
-    Minimum,
-    Median,
-}
-
-impl FromArgValue for Criterion {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value.to_lowercase().as_str() {
-            "maximum" => Ok(Criterion::Maximum),
-            "minimum" => Ok(Criterion::Minimum),
-            "median" => Ok(Criterion::Median),
-            _ => Err(format!("Invalid criterion: {}", value)),
-        }
-    }
-}
-
-impl Criterion {
-    fn enforce(&self, mut values: Vec<f64>) -> f64 {
-        match self {
-            Criterion::Maximum => values.iter().fold(f64::NEG_INFINITY, |a, b| a.max(*b)),
-            Criterion::Minimum => values.iter().fold(f64::INFINITY, |a, b| a.min(*b)),
-            Criterion::Median => {
-                values.sort_by(|a, b| a.total_cmp(b));
-                values[values.len() / 2]
-            }
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct ExhaustiveSearchState(utils::exhaustive::Iter);
-
-impl ExhaustiveSearchState {
-    fn new(iter: utils::exhaustive::Iter) -> Self {
-        ExhaustiveSearchState(iter)
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct GeneticSearchState {
-    generation: usize,
-    instances: Vec<Arc<Instance>>,
-}
-
-impl GeneticSearchState {
-    fn new(profile: &Profile, initial: usize) -> Self {
-        let mut instances = Vec::with_capacity(initial);
-        for _ in 0..initial {
-            instances.push(Arc::new(utils::genetic::random(profile)));
-        }
-        GeneticSearchState {
-            generation: 0,
-            instances,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize)]
 pub(crate) enum SavedState {
-    Exhaustive(ExhaustiveSearchState),
-    Genetic(GeneticSearchState),
+    Exhaustive(utils::exhaustive::SearchState),
+    Genetic(utils::genetic::SearchState),
 }
 
-impl From<ExhaustiveSearchState> for SavedState {
-    fn from(state: ExhaustiveSearchState) -> Self {
+impl From<utils::exhaustive::SearchState> for SavedState {
+    fn from(state: utils::exhaustive::SearchState) -> Self {
         SavedState::Exhaustive(state)
     }
 }
 
-impl From<GeneticSearchState> for SavedState {
-    fn from(state: GeneticSearchState) -> Self {
+impl From<utils::genetic::SearchState> for SavedState {
+    fn from(state: utils::genetic::SearchState) -> Self {
         SavedState::Genetic(state)
     }
 }
@@ -236,17 +199,17 @@ impl<'s> Autotuner<'s> {
             })
         };
 
-        let mut results = Results::new(direction, candidates);
-        let saved_state = match strategy {
+        let output = match strategy {
             Strategy::Exhaustive(_) => {
+                let mut output = utils::exhaustive::Output::new(direction, candidates);
                 let mut state = if let Some(SavedState::Exhaustive(state)) = state {
                     state
                 } else {
-                    ExhaustiveSearchState::new(self.metadata.profile.iter())
+                    self.metadata.profile.iter()
                 };
 
                 let mut count = 1;
-                for instance in &mut state.0 {
+                for instance in &mut state {
                     unsafe {
                         utils::block(SIGQUIT);
                     }
@@ -254,7 +217,7 @@ impl<'s> Autotuner<'s> {
                     println!("{}/{}: ", count, self.metadata.profile.len());
 
                     let result = match self.evaluate(&instance, repetition) {
-                        Ok(values) => criterion.enforce(values),
+                        Ok(values) => criterion.extract_representative(values),
                         Err(_) => f64::INFINITY,
                     };
 
@@ -263,7 +226,7 @@ impl<'s> Autotuner<'s> {
                         println!("{}", self.metadata.profile.display(&instance));
                     }
                     println!();
-                    results.push(Arc::new(instance), result);
+                    output.push(Arc::new(instance), result);
 
                     unsafe {
                         utils::unblock(SIGQUIT);
@@ -277,48 +240,49 @@ impl<'s> Autotuner<'s> {
                 }
 
                 if *is_canceled {
-                    Some(state.into())
+                    Union::Second(state.into())
                 } else {
-                    None
+                    Union::First(output.into_iter())
                 }
             }
             Strategy::Genetic(options) => {
+                let mut output = utils::genetic::Output::new(direction, candidates);
                 let mut state = if let Some(SavedState::Genetic(state)) = state {
                     state
                 } else {
-                    GeneticSearchState::new(&self.metadata.profile, options.initial)
+                    utils::genetic::SearchState::new(&self.metadata.profile, options.initial)
                 };
+                let mut history = Vec::new();
 
                 let mut evaluation_results: Vec<(f64, usize)> = Vec::with_capacity(options.initial);
                 let mut rng = rand::rng();
                 while state.generation < options.limit {
                     if !evaluation_results.is_empty() {
-                        let min = evaluation_results
+                        let iter = evaluation_results
                             .iter()
-                            .filter(|(x, _)| !x.is_infinite())
-                            .fold(f64::INFINITY, |a, &b| a.min(b.0));
-                        let max = evaluation_results
-                            .iter()
-                            .filter(|(x, _)| !x.is_infinite())
-                            .fold(f64::NEG_INFINITY, |a, &b| a.max(b.0));
+                            .map(|(x, _)| *x)
+                            .filter(|x| x.is_finite());
                         println!("=== Generation #{} Summary ===", state.generation);
-                        if let Some(best) = results.best() {
-                            println!("Best overall: {} ms", best.1);
-                        }
-                        println!("Best: {} ms", min);
-                        println!("Worst: {} ms", max);
-                        println!();
+                        let best = direction.best(iter.clone());
+                        let worst = direction.worst(iter);
+                        let summary = utils::genetic::GenerationSummary::new(
+                            output.best().map(|x| x.1),
+                            best,
+                            worst,
+                        );
+                        print!("{}\n\n", summary);
+                        history.push(summary);
 
                         let mut inversed = evaluation_results.clone();
                         for pair in &mut inversed {
                             if pair.0.is_infinite() {
-                                pair.0 = max;
+                                pair.0 = worst;
                                 continue;
                             }
 
                             pair.0 = match direction {
                                 Direction::Minimize => pair.0,
-                                Direction::Maximize => max - pair.0,
+                                Direction::Maximize => worst - pair.0,
                             };
                         }
                         inversed.shuffle(&mut rng);
@@ -330,12 +294,12 @@ impl<'s> Autotuner<'s> {
 
                         for result in &mut evaluation_results {
                             if result.0.is_infinite() {
-                                result.0 = min;
+                                result.0 = best;
                                 continue;
                             }
 
                             result.0 = match direction {
-                                Direction::Minimize => max - result.0,
+                                Direction::Minimize => worst - result.0,
                                 Direction::Maximize => result.0,
                             };
                         }
@@ -384,7 +348,7 @@ impl<'s> Autotuner<'s> {
                         );
 
                         let result = match self.evaluate(&fresh_instances[i].1, repetition) {
-                            Ok(values) => criterion.enforce(values),
+                            Ok(values) => criterion.extract_representative(values),
                             Err(_) => f64::INFINITY,
                         };
                         println!("{} ms", result);
@@ -392,7 +356,7 @@ impl<'s> Autotuner<'s> {
                             println!("{}", self.metadata.profile.display(&fresh_instances[i].1));
                         }
                         println!();
-                        results.push(state.instances[i].clone(), result);
+                        output.push(state.instances[i].clone(), result);
                         evaluation_results.push((result, i));
 
                         unsafe {
@@ -412,9 +376,9 @@ impl<'s> Autotuner<'s> {
                 }
 
                 if *is_canceled {
-                    Some(state.into())
+                    Union::Second(state.into())
                 } else {
-                    None
+                    Union::First(output.into_iter())
                 }
             }
         };
@@ -437,14 +401,14 @@ impl<'s> Autotuner<'s> {
             }
         }
 
-        if let Some(saved_state) = saved_state {
-            Union::Second(saved_state)
-        } else {
-            let instances = results
-                .iter()
-                .map(|result| (self.metadata.profile.display(&result.0), result.1))
-                .collect::<Vec<_>>();
-            Union::First(instances)
+        match output {
+            Union::First(output) => {
+                let instances = output
+                    .map(|result| (self.metadata.profile.display(&result.0), result.1))
+                    .collect::<Vec<_>>();
+                Union::First(instances)
+            }
+            Union::Second(saved_state) => Union::Second(saved_state),
         }
     }
 

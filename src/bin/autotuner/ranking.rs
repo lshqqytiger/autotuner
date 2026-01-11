@@ -1,43 +1,6 @@
-use argh::FromArgValue;
+use crate::{direction::Direction, evaluation_result::EvaluationResult};
 use autotuner::parameter::Instance;
-use std::{cmp, collections::BinaryHeap, result, sync::Arc};
-
-pub(crate) enum Direction {
-    Minimize,
-    Maximize,
-}
-
-impl FromArgValue for Direction {
-    fn from_arg_value(value: &str) -> result::Result<Self, String> {
-        match value.to_lowercase().as_str() {
-            "minimize" => Ok(Direction::Minimize),
-            "maximize" => Ok(Direction::Maximize),
-            _ => Err(format!("Invalid direction: {}", value)),
-        }
-    }
-}
-
-pub(crate) struct Result(pub(crate) Arc<Instance>, pub(crate) f64);
-
-impl PartialEq for Result {
-    fn eq(&self, other: &Self) -> bool {
-        self.1 == other.1
-    }
-}
-
-impl Eq for Result {}
-
-impl PartialOrd for Result {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        self.1.partial_cmp(&other.1)
-    }
-}
-
-impl Ord for Result {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.1.total_cmp(&other.1)
-    }
-}
+use std::{cmp, collections::BinaryHeap, sync::Arc};
 
 enum Heap<T: Ord> {
     Min(BinaryHeap<T>),
@@ -79,23 +42,33 @@ impl<T: Ord> Heap<T> {
             Heap::Max(heap) => Box::new(heap.iter().map(|rev| &rev.0)),
         }
     }
+
+    fn into_iter<'a>(self) -> Box<dyn Iterator<Item = T> + 'a>
+    where
+        T: 'a,
+    {
+        match self {
+            Heap::Min(heap) => Box::new(heap.into_iter()),
+            Heap::Max(heap) => Box::new(heap.into_iter().map(|rev| rev.0)),
+        }
+    }
 }
 
-pub(crate) struct Results {
-    heap: Heap<Result>,
+pub(crate) struct Ranking {
+    heap: Heap<EvaluationResult>,
     size: usize,
 }
 
-impl Results {
+impl Ranking {
     pub(crate) fn new(direction: &Direction, size: usize) -> Self {
-        Results {
+        Ranking {
             heap: Heap::new(direction),
             size,
         }
     }
 
     pub(crate) fn push(&mut self, instance: Arc<Instance>, fitness: f64) {
-        let result = Result(instance, fitness);
+        let result = EvaluationResult(instance, fitness);
         if self.heap.len() < self.size {
             self.heap.push(result);
         } else {
@@ -112,11 +85,18 @@ impl Results {
         }
     }
 
-    pub(crate) fn best(&self) -> Option<&Result> {
+    pub(crate) fn best(&self) -> Option<&EvaluationResult> {
         self.iter().min()
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Result> {
+    fn iter(&self) -> impl Iterator<Item = &EvaluationResult> {
         self.heap.iter()
+    }
+
+    pub(crate) fn into_iter<'a>(self) -> impl Iterator<Item = EvaluationResult> + 'a
+    where
+        EvaluationResult: 'a,
+    {
+        self.heap.into_iter()
     }
 }

@@ -1,18 +1,18 @@
 use std::ops::{Deref, DerefMut};
 
 #[repr(transparent)]
-pub(crate) struct ManuallyMove<T: Sized>(*mut T);
+pub struct ManuallyMove<T: Sized>(*mut T);
 
 impl<T: Sized> ManuallyMove<T> {
-    pub(crate) fn new(value: T) -> Self {
+    pub fn new(value: T) -> Self {
         ManuallyMove(Box::into_raw(Box::new(value)))
     }
 
-    pub(crate) unsafe fn mov(&self) -> ManuallyMove<T> {
+    pub unsafe fn mov(&self) -> ManuallyMove<T> {
         ManuallyMove(self.0)
     }
 
-    pub(crate) fn drop(self) {
+    pub fn drop(self) {
         drop(unsafe { Box::from_raw(self.0) });
     }
 }

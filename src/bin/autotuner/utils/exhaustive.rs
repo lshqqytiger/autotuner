@@ -1,40 +1,19 @@
+use crate::ranking::Ranking;
 use autotuner::parameter::{Instance, Profile, Specification, Value};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
-pub(crate) trait Exhaustive {
-    fn iter(&self) -> Iter;
-}
-
-impl Exhaustive for Profile {
-    fn iter(&self) -> Iter {
-        let names = self.0.keys().cloned().collect::<Vec<Arc<str>>>();
-        let specifications = names
-            .iter()
-            .map(|name| self.0.get(name).unwrap().clone())
-            .collect::<Vec<Arc<Specification>>>();
-        let values = specifications
-            .iter()
-            .map(|specification| specification.get_space().default())
-            .collect::<Vec<Value>>();
-        Iter {
-            names,
-            values,
-            specifications,
-            done: false,
-        }
-    }
-}
+pub(crate) type Output = Ranking;
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Iter {
+pub(crate) struct SearchState {
     names: Vec<Arc<str>>,
     values: Vec<Value>,
     specifications: Vec<Arc<Specification>>,
     done: bool,
 }
 
-impl Iterator for Iter {
+impl Iterator for SearchState {
     type Item = Instance;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -66,5 +45,29 @@ impl Iterator for Iter {
 
         self.done = true;
         Some(instance)
+    }
+}
+
+pub(crate) trait Exhaustive {
+    fn iter(&self) -> SearchState;
+}
+
+impl Exhaustive for Profile {
+    fn iter(&self) -> SearchState {
+        let names = self.0.keys().cloned().collect::<Vec<Arc<str>>>();
+        let specifications = names
+            .iter()
+            .map(|name| self.0.get(name).unwrap().clone())
+            .collect::<Vec<Arc<Specification>>>();
+        let values = specifications
+            .iter()
+            .map(|specification| specification.get_space().default())
+            .collect::<Vec<Value>>();
+        SearchState {
+            names,
+            values,
+            specifications,
+            done: false,
+        }
     }
 }
