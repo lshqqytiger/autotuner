@@ -1,11 +1,8 @@
-use crate::ranking::Ranking;
 use autotuner::parameter::{
     Instance, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt, sync::Arc};
-
-pub(crate) type Output = Ranking;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SearchState {
@@ -26,6 +23,7 @@ impl SearchState {
     }
 }
 
+#[derive(Serialize)]
 pub(crate) struct GenerationSummary {
     pub(crate) best_overall: Option<f64>,
     pub(crate) best: f64,

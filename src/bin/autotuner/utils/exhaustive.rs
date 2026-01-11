@@ -1,9 +1,6 @@
-use crate::ranking::Ranking;
 use autotuner::parameter::{Instance, Profile, Specification, Value};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
-
-pub(crate) type Output = Ranking;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SearchState {

@@ -1,4 +1,4 @@
-use crate::{direction::Direction, evaluation_result::EvaluationResult};
+use crate::{direction::Direction, execution_result::ExecutionResult};
 use autotuner::parameter::Instance;
 use std::{cmp, collections::BinaryHeap, sync::Arc};
 
@@ -55,7 +55,7 @@ impl<T: Ord> Heap<T> {
 }
 
 pub(crate) struct Ranking {
-    heap: Heap<EvaluationResult>,
+    heap: Heap<ExecutionResult>,
     size: usize,
 }
 
@@ -68,7 +68,7 @@ impl Ranking {
     }
 
     pub(crate) fn push(&mut self, instance: Arc<Instance>, fitness: f64) {
-        let result = EvaluationResult(instance, fitness);
+        let result = ExecutionResult(instance, fitness);
         if self.heap.len() < self.size {
             self.heap.push(result);
         } else {
@@ -85,18 +85,22 @@ impl Ranking {
         }
     }
 
-    pub(crate) fn best(&self) -> Option<&EvaluationResult> {
+    pub(crate) fn best(&self) -> Option<&ExecutionResult> {
         self.iter().min()
     }
 
-    fn iter(&self) -> impl Iterator<Item = &EvaluationResult> {
+    fn iter(&self) -> impl Iterator<Item = &ExecutionResult> {
         self.heap.iter()
     }
 
-    pub(crate) fn into_iter<'a>(self) -> impl Iterator<Item = EvaluationResult> + 'a
+    fn into_iter<'a>(self) -> impl Iterator<Item = ExecutionResult> + 'a
     where
-        EvaluationResult: 'a,
+        ExecutionResult: 'a,
     {
         self.heap.into_iter()
+    }
+
+    pub(crate) fn to_vec(self) -> Vec<ExecutionResult> {
+        self.into_iter().collect()
     }
 }

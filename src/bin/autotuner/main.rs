@@ -1,27 +1,28 @@
 mod compile;
 mod criterion;
 mod direction;
-mod evaluation_result;
+mod execution_result;
 mod helper;
 mod ranking;
 mod utils;
 mod workspace;
 
 use crate::{
-    criterion::Criterion, direction::Direction, helper::*, utils::exhaustive::Exhaustive,
-    workspace::Workspace,
+    criterion::Criterion, direction::Direction, helper::*, ranking::Ranking,
+    utils::exhaustive::Exhaustive, workspace::Workspace,
 };
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
 use autotuner::{
-    manually_move::ManuallyMove, metadata::Metadata, parameter::Instance, union::Union,
+    first, manually_move::ManuallyMove, match_union, metadata::Metadata, parameter::Instance,
+    second, union::Union,
 };
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::{Library, Symbol};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, process, ptr, sync::Arc, time::SystemTime};
+use std::{fs, io, process, ptr, sync::Arc, time::SystemTime};
 use tempdir::TempDir;
 
 trait OrNull<T> {
@@ -134,8 +135,21 @@ enum Strategy {
     Genetic(GeneticSearchOptions),
 }
 
+struct Output<'a>(&'a String, String);
+
+impl<'a> Output<'a> {
+    fn new<T: Serialize>(path: &'a String, object: T) -> serde_json::Result<Self> {
+        let value = serde_json::to_string_pretty(&object)?;
+        Ok(Output(path, value))
+    }
+
+    fn save(self) -> io::Result<()> {
+        fs::write(self.0, self.1)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
-pub(crate) enum SavedState {
+enum SavedState {
     Exhaustive(utils::exhaustive::SearchState),
     Genetic(utils::genetic::SearchState),
 }
@@ -180,16 +194,17 @@ impl<'s> Autotuner<'s> {
         })
     }
 
-    fn run(
-        &self,
+    fn run<'a>(
+        &'a self,
         direction: &Direction,
-        strategy: &Strategy,
+        strategy: &'a Strategy,
         criterion: &Criterion,
         repetition: usize,
         candidates: usize,
         state: Option<SavedState>,
         verbose: bool,
-    ) -> Union<Vec<(String, f64)>, SavedState> {
+        path: &'a String,
+    ) -> Union<Vec<Output<'a>>, SavedState> {
         let is_canceled = ManuallyMove::new(false);
         let sigquit_handler = unsafe {
             let is_canceled = is_canceled.clone();
@@ -201,7 +216,7 @@ impl<'s> Autotuner<'s> {
 
         let output = match strategy {
             Strategy::Exhaustive(_) => {
-                let mut output = utils::exhaustive::Output::new(direction, candidates);
+                let mut ranking = Ranking::new(direction, candidates);
                 let mut state = if let Some(SavedState::Exhaustive(state)) = state {
                     state
                 } else {
@@ -226,7 +241,7 @@ impl<'s> Autotuner<'s> {
                         println!("{}", self.metadata.profile.display(&instance));
                     }
                     println!();
-                    output.push(Arc::new(instance), result);
+                    ranking.push(Arc::new(instance), result);
 
                     unsafe {
                         utils::unblock(SIGQUIT);
@@ -240,13 +255,21 @@ impl<'s> Autotuner<'s> {
                 }
 
                 if *is_canceled {
-                    Union::Second(state.into())
+                    second!(state.into())
                 } else {
-                    Union::First(output.into_iter())
+                    let mut output = ranking.to_vec();
+                    direction.sort(&mut output);
+                    let output: Vec<_> = output
+                        .into_iter()
+                        .map(|result| (self.metadata.profile.display(&result.0), result.1))
+                        .collect();
+                    first!(vec![
+                        Output::new(path, output).expect("Failed to serialize object"),
+                    ])
                 }
             }
             Strategy::Genetic(options) => {
-                let mut output = utils::genetic::Output::new(direction, candidates);
+                let mut ranking = Ranking::new(direction, candidates);
                 let mut state = if let Some(SavedState::Genetic(state)) = state {
                     state
                 } else {
@@ -266,7 +289,7 @@ impl<'s> Autotuner<'s> {
                         let best = direction.best(iter.clone());
                         let worst = direction.worst(iter);
                         let summary = utils::genetic::GenerationSummary::new(
-                            output.best().map(|x| x.1),
+                            ranking.best().map(|x| x.1),
                             best,
                             worst,
                         );
@@ -356,7 +379,7 @@ impl<'s> Autotuner<'s> {
                             println!("{}", self.metadata.profile.display(&fresh_instances[i].1));
                         }
                         println!();
-                        output.push(state.instances[i].clone(), result);
+                        ranking.push(state.instances[i].clone(), result);
                         evaluation_results.push((result, i));
 
                         unsafe {
@@ -376,9 +399,21 @@ impl<'s> Autotuner<'s> {
                 }
 
                 if *is_canceled {
-                    Union::Second(state.into())
+                    second!(state.into())
                 } else {
-                    Union::First(output.into_iter())
+                    let mut output = ranking.to_vec();
+                    direction.sort(&mut output);
+                    let output: Vec<_> = output
+                        .into_iter()
+                        .map(|result| (self.metadata.profile.display(&result.0), result.1))
+                        .collect();
+                    let mut outputs =
+                        vec![Output::new(path, output).expect("Failed to serialize object")];
+                    if let Some(path) = &options.history {
+                        outputs
+                            .push(Output::new(path, history).expect("Failed to serialize object"));
+                    }
+                    first!(outputs)
                 }
             }
         };
@@ -401,15 +436,7 @@ impl<'s> Autotuner<'s> {
             }
         }
 
-        match output {
-            Union::First(output) => {
-                let instances = output
-                    .map(|result| (self.metadata.profile.display(&result.0), result.1))
-                    .collect::<Vec<_>>();
-                Union::First(instances)
-            }
-            Union::Second(saved_state) => Union::Second(saved_state),
-        }
+        output
     }
 
     fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<Vec<f64>> {
@@ -481,24 +508,23 @@ fn main() -> anyhow::Result<()> {
         let content = fs::read_to_string(filename).expect("Failed to read saved state file");
         serde_json::from_str::<SavedState>(&content).expect("Failed to parse saved state file")
     });
-    match autotuner.run(
-        &args.direction,
-        &args.strategy,
-        &args.criterion,
-        args.repetition,
-        args.candidates,
-        state,
-        args.verbose,
-    ) {
-        Union::First(mut instances) => {
-            instances.sort_by(|a, b| a.1.total_cmp(&b.1));
-            fs::write(
-                args.output,
-                serde_json::to_string_pretty(&instances).expect("Failed to serialize instances"),
-            )
-            .expect("Failed to write results to file");
-        }
-        Union::Second(saved_state) => {
+    match_union!(
+        autotuner.run(
+            &args.direction,
+            &args.strategy,
+            &args.criterion,
+            args.repetition,
+            args.candidates,
+            state,
+            args.verbose,
+            &args.output,
+        );
+        output => {
+            for output in output {
+                output.save().expect("Failed to write output file");
+            }
+        },
+        saved_state => {
             let filename = format!(
                 "saved_state.{}",
                 SystemTime::now()
@@ -513,7 +539,7 @@ fn main() -> anyhow::Result<()> {
             .expect("Failed to write current state to file");
             println!("Saved current state to {}", filename);
         }
-    }
+    );
 
     Ok(())
 }
