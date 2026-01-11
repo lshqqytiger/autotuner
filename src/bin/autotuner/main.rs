@@ -496,6 +496,11 @@ fn main() -> anyhow::Result<()> {
             if options.ngeneration == 0 {
                 return Err(anyhow!("Number of each generation must be greater than 0"));
             }
+            if args.continue_.is_some() && options.history.is_some() {
+                return Err(anyhow!(
+                    "Cannot specify history output file when continuing from saved state"
+                ));
+            }
         }
     }
 
