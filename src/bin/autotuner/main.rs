@@ -285,17 +285,16 @@ impl<'s> Autotuner<'s> {
                             .iter()
                             .map(|(x, _)| *x)
                             .filter(|x| x.is_finite());
-                        println!("=== Generation #{} Summary ===", state.generation);
-                        let best = direction.best(iter.clone());
-                        let worst = direction.worst(iter);
-                        let summary = utils::genetic::GenerationSummary::new(
-                            ranking.best().cloned(),
-                            best,
-                            worst,
+                        let minmax = direction.minmax(iter);
+                        let summary =
+                            utils::genetic::GenerationSummary::new(ranking.best().cloned(), minmax);
+                        print!(
+                            "=== Generation #{} Summary ===\n{}\n\n",
+                            state.generation, summary
                         );
-                        print!("{}\n\n", summary);
                         history.push(summary);
 
+                        let (best, worst) = minmax;
                         let mut inversed = evaluation_results.clone();
                         for pair in &mut inversed {
                             if pair.0.is_infinite() {

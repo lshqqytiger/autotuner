@@ -45,8 +45,7 @@ impl fmt::Display for GenerationSummary {
 impl GenerationSummary {
     pub(crate) fn new(
         best_overall: Option<ExecutionResult>,
-        current_best: f64,
-        current_worst: f64,
+        (current_best, current_worst): (f64, f64),
     ) -> Self {
         GenerationSummary {
             best_overall,

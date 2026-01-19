@@ -6,17 +6,13 @@ pub(crate) enum Direction {
 }
 
 impl Direction {
-    pub(crate) fn best(&self, iter: impl Iterator<Item = f64>) -> f64 {
+    pub(crate) fn minmax(&self, iter: impl Iterator<Item = f64>) -> (f64, f64) {
+        let (min, max) = iter.fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), v| {
+            (min.min(v), max.max(v))
+        });
         match self {
-            Direction::Minimize => iter.fold(f64::INFINITY, |a, b| a.min(b)),
-            Direction::Maximize => iter.fold(f64::NEG_INFINITY, |a, b| a.max(b)),
-        }
-    }
-
-    pub(crate) fn worst(&self, iter: impl Iterator<Item = f64>) -> f64 {
-        match self {
-            Direction::Minimize => iter.fold(f64::NEG_INFINITY, |a, b| a.max(b)),
-            Direction::Maximize => iter.fold(f64::INFINITY, |a, b| a.min(b)),
+            Direction::Minimize => (min, max),
+            Direction::Maximize => (max, min),
         }
     }
 
