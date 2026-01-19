@@ -1,7 +1,9 @@
 use autotuner::parameter::Instance;
+use serde::Serialize;
 use std::cmp;
 use std::sync::Arc;
 
+#[derive(Serialize, Clone)]
 pub(crate) struct ExecutionResult(pub(crate) Arc<Instance>, pub(crate) f64);
 
 impl PartialEq for ExecutionResult {

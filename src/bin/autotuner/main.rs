@@ -289,7 +289,7 @@ impl<'s> Autotuner<'s> {
                         let best = direction.best(iter.clone());
                         let worst = direction.worst(iter);
                         let summary = utils::genetic::GenerationSummary::new(
-                            ranking.best().map(|x| x.1),
+                            ranking.best().cloned(),
                             best,
                             worst,
                         );

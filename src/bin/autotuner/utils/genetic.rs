@@ -4,6 +4,8 @@ use autotuner::parameter::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
+use crate::execution_result::ExecutionResult;
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct State {
     pub(crate) generation: usize,
@@ -25,27 +27,31 @@ impl State {
 
 #[derive(Serialize)]
 pub(crate) struct GenerationSummary {
-    pub(crate) best_overall: Option<f64>,
-    pub(crate) best: f64,
-    pub(crate) worst: f64,
+    pub(crate) best_overall: Option<ExecutionResult>,
+    pub(crate) current_best: f64,
+    pub(crate) current_worst: f64,
 }
 
 impl fmt::Display for GenerationSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(best_overall) = self.best_overall {
-            writeln!(f, "Best overall: {} ms", best_overall)?;
+        if let Some(best_overall) = &self.best_overall {
+            writeln!(f, "Best overall: {} ms", best_overall.1)?;
         }
-        writeln!(f, "Best: {} ms", self.best)?;
-        writeln!(f, "Worst: {} ms", self.worst)
+        writeln!(f, "Best: {} ms", self.current_best)?;
+        writeln!(f, "Worst: {} ms", self.current_worst)
     }
 }
 
 impl GenerationSummary {
-    pub(crate) fn new(best_overall: Option<f64>, best: f64, worst: f64) -> Self {
+    pub(crate) fn new(
+        best_overall: Option<ExecutionResult>,
+        current_best: f64,
+        current_worst: f64,
+    ) -> Self {
         GenerationSummary {
             best_overall,
-            best,
-            worst,
+            current_best,
+            current_worst,
         }
     }
 }
