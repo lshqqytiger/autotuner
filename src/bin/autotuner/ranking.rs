@@ -15,6 +15,7 @@ impl<T: Ord> Heap<T> {
         }
     }
 
+    #[inline]
     fn push(&mut self, value: T) {
         match self {
             Heap::Min(heap) => heap.push(value),
@@ -22,6 +23,7 @@ impl<T: Ord> Heap<T> {
         }
     }
 
+    #[inline]
     fn pop(&mut self) -> Option<T> {
         match self {
             Heap::Min(heap) => heap.pop(),
@@ -29,6 +31,7 @@ impl<T: Ord> Heap<T> {
         }
     }
 
+    #[inline]
     fn len(&self) -> usize {
         match self {
             Heap::Min(heap) => heap.len(),
@@ -36,6 +39,7 @@ impl<T: Ord> Heap<T> {
         }
     }
 
+    #[inline]
     fn iter(&self) -> Box<dyn Iterator<Item = &T> + '_> {
         match self {
             Heap::Min(heap) => Box::new(heap.iter()),
@@ -43,6 +47,7 @@ impl<T: Ord> Heap<T> {
         }
     }
 
+    #[inline]
     fn into_iter<'a>(self) -> Box<dyn Iterator<Item = T> + 'a>
     where
         T: 'a,
@@ -85,14 +90,17 @@ impl Ranking {
         }
     }
 
+    #[inline]
     pub(crate) fn best(&self) -> Option<&ExecutionResult> {
         self.iter().min()
     }
 
+    #[inline]
     fn iter(&self) -> impl Iterator<Item = &ExecutionResult> {
         self.heap.iter()
     }
 
+    #[inline]
     fn into_iter<'a>(self) -> impl Iterator<Item = ExecutionResult> + 'a
     where
         ExecutionResult: 'a,

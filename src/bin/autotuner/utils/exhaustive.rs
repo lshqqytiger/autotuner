@@ -3,14 +3,14 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct SearchState {
+pub(crate) struct State {
     names: Vec<Arc<str>>,
     values: Vec<Value>,
     specifications: Vec<Arc<Specification>>,
     done: bool,
 }
 
-impl Iterator for SearchState {
+impl Iterator for State {
     type Item = Instance;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -46,11 +46,11 @@ impl Iterator for SearchState {
 }
 
 pub(crate) trait Exhaustive {
-    fn iter(&self) -> SearchState;
+    fn iter(&self) -> State;
 }
 
 impl Exhaustive for Profile {
-    fn iter(&self) -> SearchState {
+    fn iter(&self) -> State {
         let names = self.0.keys().cloned().collect::<Vec<Arc<str>>>();
         let specifications = names
             .iter()
@@ -60,7 +60,7 @@ impl Exhaustive for Profile {
             .iter()
             .map(|specification| specification.get_space().default())
             .collect::<Vec<Value>>();
-        SearchState {
+        State {
             names,
             values,
             specifications,

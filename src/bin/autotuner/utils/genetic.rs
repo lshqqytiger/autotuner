@@ -5,18 +5,18 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct SearchState {
+pub(crate) struct State {
     pub(crate) generation: usize,
     pub(crate) instances: Vec<Arc<Instance>>,
 }
 
-impl SearchState {
+impl State {
     pub(crate) fn new(profile: &Profile, initial: usize) -> Self {
         let mut instances = Vec::with_capacity(initial);
         for _ in 0..initial {
             instances.push(Arc::new(random(profile)));
         }
-        SearchState {
+        State {
             generation: 0,
             instances,
         }

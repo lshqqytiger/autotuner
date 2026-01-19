@@ -150,18 +150,18 @@ impl<'a> Output<'a> {
 
 #[derive(Serialize, Deserialize)]
 enum SavedState {
-    Exhaustive(utils::exhaustive::SearchState),
-    Genetic(utils::genetic::SearchState),
+    Exhaustive(utils::exhaustive::State),
+    Genetic(utils::genetic::State),
 }
 
-impl From<utils::exhaustive::SearchState> for SavedState {
-    fn from(state: utils::exhaustive::SearchState) -> Self {
+impl From<utils::exhaustive::State> for SavedState {
+    fn from(state: utils::exhaustive::State) -> Self {
         SavedState::Exhaustive(state)
     }
 }
 
-impl From<utils::genetic::SearchState> for SavedState {
-    fn from(state: utils::genetic::SearchState) -> Self {
+impl From<utils::genetic::State> for SavedState {
+    fn from(state: utils::genetic::State) -> Self {
         SavedState::Genetic(state)
     }
 }
@@ -273,7 +273,7 @@ impl<'s> Autotuner<'s> {
                 let mut state = if let Some(SavedState::Genetic(state)) = state {
                     state
                 } else {
-                    utils::genetic::SearchState::new(&self.metadata.profile, options.initial)
+                    utils::genetic::State::new(&self.metadata.profile, options.initial)
                 };
                 let mut history = Vec::new();
 
