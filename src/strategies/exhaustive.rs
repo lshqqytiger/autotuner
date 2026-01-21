@@ -1,4 +1,4 @@
-use autotuner::parameter::{Instance, Profile, Specification, Value};
+use crate::parameter::{Instance, Profile, Specification, Value};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 

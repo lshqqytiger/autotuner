@@ -21,8 +21,4 @@ tempdir = "0.3.7"
 
 [[bin]]
 name = "autotuner"
-path = "src/bin/autotuner/main.rs"
-
-[[bin]]
-name = "generate-metadata"
-path = "src/bin/generate-metadata.rs"
+path = "src/main.rs"

@@ -1,5 +1,5 @@
-pub mod exhaustive;
-pub mod genetic;
+pub(crate) mod exhaustive;
+pub(crate) mod genetic;
 
 use std::{mem, ptr};
 

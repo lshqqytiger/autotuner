@@ -20,7 +20,7 @@ impl Interner {
     }
 }
 
-pub trait Intern {
+pub(crate) trait Intern {
     fn intern(&self) -> Arc<str>;
 }
 

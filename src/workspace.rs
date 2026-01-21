@@ -1,5 +1,4 @@
-use crate::helper::Initializer;
-use autotuner::metadata::Metadata;
+use crate::{helper::Initializer, metadata::Metadata};
 use libloading::{Library, Symbol};
 use std::{ffi, ptr};
 

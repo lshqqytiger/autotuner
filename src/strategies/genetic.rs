@@ -1,10 +1,9 @@
-use autotuner::parameter::{
+use crate::execution_result::ExecutionResult;
+use crate::parameter::{
     Instance, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt, sync::Arc};
-
-use crate::execution_result::ExecutionResult;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct State {

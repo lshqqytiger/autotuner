@@ -1,5 +1,4 @@
-use crate::{direction::Direction, execution_result::ExecutionResult};
-use autotuner::parameter::Instance;
+use crate::{direction::Direction, execution_result::ExecutionResult, parameter::Instance};
 use std::{cmp, collections::BinaryHeap, sync::Arc};
 
 enum Heap<T: Ord> {

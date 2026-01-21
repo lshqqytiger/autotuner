@@ -3,20 +3,26 @@ mod criterion;
 mod direction;
 mod execution_result;
 mod helper;
+mod metadata;
+mod parameter;
 mod ranking;
+mod strategies;
 mod utils;
 mod workspace;
 
 use crate::{
-    criterion::Criterion, direction::Direction, helper::*, ranking::Ranking,
-    utils::exhaustive::Exhaustive, workspace::Workspace,
+    criterion::Criterion,
+    direction::Direction,
+    helper::*,
+    metadata::Metadata,
+    parameter::Instance,
+    ranking::Ranking,
+    strategies::exhaustive::Exhaustive,
+    utils::{manually_move::ManuallyMove, union::Union},
+    workspace::Workspace,
 };
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
-use autotuner::{
-    first, manually_move::ManuallyMove, match_union, metadata::Metadata, parameter::Instance,
-    second, union::Union,
-};
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::{Library, Symbol};
 use rand::seq::SliceRandom;
@@ -150,18 +156,18 @@ impl<'a> Output<'a> {
 
 #[derive(Serialize, Deserialize)]
 enum SavedState {
-    Exhaustive(utils::exhaustive::State),
-    Genetic(utils::genetic::State),
+    Exhaustive(strategies::exhaustive::State),
+    Genetic(strategies::genetic::State),
 }
 
-impl From<utils::exhaustive::State> for SavedState {
-    fn from(state: utils::exhaustive::State) -> Self {
+impl From<strategies::exhaustive::State> for SavedState {
+    fn from(state: strategies::exhaustive::State) -> Self {
         SavedState::Exhaustive(state)
     }
 }
 
-impl From<utils::genetic::State> for SavedState {
-    fn from(state: utils::genetic::State) -> Self {
+impl From<strategies::genetic::State> for SavedState {
+    fn from(state: strategies::genetic::State) -> Self {
         SavedState::Genetic(state)
     }
 }
@@ -226,7 +232,7 @@ impl<'s> Autotuner<'s> {
                 let mut count = 1;
                 for instance in &mut state {
                     unsafe {
-                        utils::block(SIGQUIT);
+                        strategies::block(SIGQUIT);
                     }
 
                     println!("{}/{}: ", count, self.metadata.profile.len());
@@ -244,7 +250,7 @@ impl<'s> Autotuner<'s> {
                     ranking.push(Arc::new(instance), result);
 
                     unsafe {
-                        utils::unblock(SIGQUIT);
+                        strategies::unblock(SIGQUIT);
                     }
 
                     if *is_canceled {
@@ -273,7 +279,7 @@ impl<'s> Autotuner<'s> {
                 let mut state = if let Some(SavedState::Genetic(state)) = state {
                     state
                 } else {
-                    utils::genetic::State::new(&self.metadata.profile, options.initial)
+                    strategies::genetic::State::new(&self.metadata.profile, options.initial)
                 };
                 let mut history = Vec::new();
 
@@ -286,8 +292,10 @@ impl<'s> Autotuner<'s> {
                             .map(|(x, _)| *x)
                             .filter(|x| x.is_finite());
                         let minmax = direction.minmax(iter);
-                        let summary =
-                            utils::genetic::GenerationSummary::new(ranking.best().cloned(), minmax);
+                        let summary = strategies::genetic::GenerationSummary::new(
+                            ranking.best().cloned(),
+                            minmax,
+                        );
                         print!(
                             "=== Generation #{} Summary ===\n{}\n\n",
                             state.generation, summary
@@ -308,7 +316,7 @@ impl<'s> Autotuner<'s> {
                             };
                         }
                         inversed.shuffle(&mut rng);
-                        let holes = utils::genetic::stochastic_universal_sampling(
+                        let holes = strategies::genetic::stochastic_universal_sampling(
                             &inversed,
                             options.ngeneration,
                         );
@@ -329,16 +337,16 @@ impl<'s> Autotuner<'s> {
 
                         let mut children = Vec::with_capacity(options.ngeneration);
                         for _ in 0..options.ngeneration {
-                            let result = utils::genetic::stochastic_universal_sampling(
+                            let result = strategies::genetic::stochastic_universal_sampling(
                                 &evaluation_results,
                                 2,
                             );
-                            let mut child = utils::genetic::crossover(
+                            let mut child = strategies::genetic::crossover(
                                 &self.metadata.profile,
                                 &state.instances[result[0]],
                                 &state.instances[result[1]],
                             );
-                            utils::genetic::mutate(&self.metadata.profile, &mut child);
+                            strategies::genetic::mutate(&self.metadata.profile, &mut child);
                             children.push(child);
                         }
 
@@ -358,7 +366,7 @@ impl<'s> Autotuner<'s> {
                     let len = fresh_instances.len();
                     for i in 0..len {
                         unsafe {
-                            utils::block(SIGQUIT);
+                            strategies::block(SIGQUIT);
                         }
 
                         print!(
@@ -382,7 +390,7 @@ impl<'s> Autotuner<'s> {
                         evaluation_results.push((result, i));
 
                         unsafe {
-                            utils::unblock(SIGQUIT);
+                            strategies::unblock(SIGQUIT);
                         }
 
                         if *is_canceled {

@@ -1,4 +1,4 @@
-use autotuner::parameter::Instance;
+use crate::parameter::Instance;
 use serde::Serialize;
 use std::cmp;
 use std::sync::Arc;

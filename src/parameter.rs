@@ -1,9 +1,9 @@
-use crate::interner::Intern;
+use crate::utils::interner::Intern;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, convert::Infallible, hash::Hash, str::FromStr, sync::Arc};
 
-pub trait Space {
+pub(crate) trait Space {
     fn default(&self) -> Value;
     fn random(&self) -> Value;
     fn next(&self, current: &Value) -> Option<Value>;
@@ -11,7 +11,7 @@ pub trait Space {
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum IntegerSpace {
+pub(crate) enum IntegerSpace {
     Sequence(i32, i32),
     Candidates(Vec<i32>),
 }
@@ -64,11 +64,7 @@ impl Space for IntegerSpace {
     }
 }
 
-impl IntegerSpace {
-    pub const TYPES: [&'static str; 2] = ["Sequence", "Candidates"];
-}
-
-pub struct SwitchSpace {}
+pub(crate) struct SwitchSpace {}
 
 impl Space for SwitchSpace {
     #[inline]
@@ -101,7 +97,7 @@ impl Space for SwitchSpace {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct KeywordSpace(pub Vec<String>);
+pub(crate) struct KeywordSpace(pub(crate) Vec<String>);
 
 impl Space for KeywordSpace {
     #[inline]
@@ -134,7 +130,7 @@ impl Space for KeywordSpace {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct IntegerTransformer(String);
+pub(crate) struct IntegerTransformer(String);
 
 impl IntegerTransformer {
     fn apply<T: ToString>(&self, x: T) -> String {
@@ -158,7 +154,7 @@ impl ToString for IntegerTransformer {
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum Specification {
+pub(crate) enum Specification {
     Integer {
         transformer: Option<IntegerTransformer>,
         space: IntegerSpace,
@@ -168,11 +164,10 @@ pub enum Specification {
 }
 
 impl Specification {
-    pub const TYPES: [&'static str; 3] = ["Integer", "Switch", "Keyword"];
-    pub const SWITCH_SPACE: SwitchSpace = SwitchSpace {};
+    pub(crate) const SWITCH_SPACE: SwitchSpace = SwitchSpace {};
 
     #[inline]
-    pub fn get_space(&self) -> &dyn Space {
+    pub(crate) fn get_space(&self) -> &dyn Space {
         match self {
             Specification::Integer {
                 transformer: _,
@@ -185,7 +180,7 @@ impl Specification {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub enum Value {
+pub(crate) enum Value {
     Integer(i32),
     Switch(bool),
     Index(usize),
@@ -202,14 +197,10 @@ impl ToString for Value {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Profile(pub BTreeMap<Arc<str>, Arc<Specification>>);
+pub(crate) struct Profile(pub(crate) BTreeMap<Arc<str>, Arc<Specification>>);
 
 impl Profile {
-    pub fn new(profile: BTreeMap<Arc<str>, Arc<Specification>>) -> Self {
-        Profile(profile)
-    }
-
-    pub fn compiler_arguments(&self, instance: &Instance) -> Vec<String> {
+    pub(crate) fn compiler_arguments(&self, instance: &Instance) -> Vec<String> {
         let mut arguments = Vec::new();
         for (name, value) in &instance.parameters {
             match (self.0.get(name).unwrap().as_ref(), value) {
@@ -264,7 +255,7 @@ impl Profile {
         arguments
     }
 
-    pub fn display(&self, instance: &Instance) -> String {
+    pub(crate) fn display(&self, instance: &Instance) -> String {
         instance
             .parameters
             .iter()
@@ -313,7 +304,7 @@ impl Profile {
             .join(", ")
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         let mut size = 1;
         for specification in self.0.values() {
             size *= specification.get_space().len();
@@ -322,9 +313,9 @@ impl Profile {
     }
 }
 
-pub struct Instance {
-    pub id: Arc<str>,
-    pub parameters: BTreeMap<Arc<str>, Value>,
+pub(crate) struct Instance {
+    pub(crate) id: Arc<str>,
+    pub(crate) parameters: BTreeMap<Arc<str>, Value>,
 }
 
 impl Serialize for Instance {
@@ -355,7 +346,7 @@ impl<'de> Deserialize<'de> for Instance {
 }
 
 impl Instance {
-    pub fn new(parameters: BTreeMap<Arc<str>, Value>) -> Self {
+    pub(crate) fn new(parameters: BTreeMap<Arc<str>, Value>) -> Self {
         Instance {
             id: Sha256::digest(serde_json::to_vec(&parameters).unwrap())
                 .iter()
