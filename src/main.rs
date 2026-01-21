@@ -232,7 +232,7 @@ impl<'s> Autotuner<'s> {
                 let mut count = 1;
                 for instance in &mut state {
                     unsafe {
-                        strategies::block(SIGQUIT);
+                        utils::block(SIGQUIT);
                     }
 
                     println!("{}/{}: ", count, self.metadata.profile.len());
@@ -250,7 +250,7 @@ impl<'s> Autotuner<'s> {
                     ranking.push(Arc::new(instance), result);
 
                     unsafe {
-                        strategies::unblock(SIGQUIT);
+                        utils::unblock(SIGQUIT);
                     }
 
                     if *is_canceled {
@@ -366,7 +366,7 @@ impl<'s> Autotuner<'s> {
                     let len = fresh_instances.len();
                     for i in 0..len {
                         unsafe {
-                            strategies::block(SIGQUIT);
+                            utils::block(SIGQUIT);
                         }
 
                         print!(
@@ -390,7 +390,7 @@ impl<'s> Autotuner<'s> {
                         evaluation_results.push((result, i));
 
                         unsafe {
-                            strategies::unblock(SIGQUIT);
+                            utils::unblock(SIGQUIT);
                         }
 
                         if *is_canceled {
