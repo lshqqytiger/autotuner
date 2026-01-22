@@ -145,7 +145,7 @@ impl<'a> Autotuner<'a> {
             sources.iter().chain(metadata.compiler_arguments.iter()),
         )?;
         let mut workspace = helper::workspace::Workspace::default();
-        if let Some(_) = metadata.validator {
+        if metadata.validator.is_some() {
             workspace.validation_ptr = Some(ptr::null_mut());
         }
 
@@ -157,7 +157,11 @@ impl<'a> Autotuner<'a> {
                 initializer(
                     &mut workspace.input_ptr,
                     &mut workspace.output_ptr,
-                    &mut workspace.validation_ptr.or_null(),
+                    if let Some(ref mut ptr) = workspace.validation_ptr {
+                        ptr
+                    } else {
+                        ptr::null_mut()
+                    },
                 );
             }
         }
