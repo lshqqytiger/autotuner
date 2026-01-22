@@ -16,7 +16,7 @@ use crate::{
     parameter::Instance,
     ranking::Ranking,
     strategies::exhaustive::Exhaustive,
-    utils::{manually_move::ManuallyMove, traits::OrNull, union::Union},
+    utils::{manually_move::ManuallyMove, signal, traits::OrNull, union::Union},
 };
 use anyhow::anyhow;
 use argh::FromArgs;
@@ -203,7 +203,7 @@ impl<'a> Autotuner<'a> {
                 let mut count = 1;
                 for instance in &mut state {
                     unsafe {
-                        utils::block(SIGQUIT);
+                        signal::block(SIGQUIT);
                     }
 
                     println!("{}/{}: ", count, self.metadata.profile.len());
@@ -221,7 +221,7 @@ impl<'a> Autotuner<'a> {
                     ranking.push(Arc::new(instance), result);
 
                     unsafe {
-                        utils::unblock(SIGQUIT);
+                        signal::unblock(SIGQUIT);
                     }
 
                     if *is_canceled {
@@ -337,7 +337,7 @@ impl<'a> Autotuner<'a> {
                     let len = fresh_instances.len();
                     for i in 0..len {
                         unsafe {
-                            utils::block(SIGQUIT);
+                            signal::block(SIGQUIT);
                         }
 
                         print!(
@@ -361,7 +361,7 @@ impl<'a> Autotuner<'a> {
                         evaluation_results.push((result, i));
 
                         unsafe {
-                            utils::unblock(SIGQUIT);
+                            signal::unblock(SIGQUIT);
                         }
 
                         if *is_canceled {
