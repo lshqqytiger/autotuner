@@ -2,8 +2,30 @@ use crate::execution_result::ExecutionResult;
 use crate::parameter::{
     Instance, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
+use argh::FromArgs;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt, sync::Arc};
+
+#[derive(FromArgs, PartialEq, Debug, Clone)]
+/// genetic search options
+#[argh(subcommand, name = "genetic")]
+pub(crate) struct GeneticSearchOptions {
+    #[argh(option, short = 'i', default = "256")]
+    /// initial population size (default: 256)
+    pub(crate) initial: usize,
+
+    #[argh(option, short = 'n', default = "32")]
+    /// number of instances that will be made at each generation (default: 32)
+    pub(crate) ngeneration: usize,
+
+    #[argh(option, short = 'l', default = "256")]
+    /// maximum number of generations (default: 256)
+    pub(crate) limit: usize,
+
+    #[argh(option)]
+    /// output file
+    pub(crate) history: Option<String>,
+}
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct State {

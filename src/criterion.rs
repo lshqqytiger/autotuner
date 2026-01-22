@@ -1,7 +1,20 @@
+use argh::FromArgValue;
+
 pub(crate) enum Criterion {
     Maximum,
     Minimum,
     Median,
+}
+
+impl FromArgValue for Criterion {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        match value.to_lowercase().as_str() {
+            "maximum" => Ok(Criterion::Maximum),
+            "minimum" => Ok(Criterion::Minimum),
+            "median" => Ok(Criterion::Median),
+            _ => Err(format!("Invalid criterion: {}", value)),
+        }
+    }
 }
 
 impl Criterion {

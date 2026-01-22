@@ -1,8 +1,19 @@
 use crate::execution_result::ExecutionResult;
+use argh::FromArgValue;
 
 pub(crate) enum Direction {
     Minimize,
     Maximize,
+}
+
+impl FromArgValue for Direction {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        match value.to_lowercase().as_str() {
+            "minimize" => Ok(Direction::Minimize),
+            "maximize" => Ok(Direction::Maximize),
+            _ => Err(format!("Invalid direction: {}", value)),
+        }
+    }
 }
 
 impl Direction {

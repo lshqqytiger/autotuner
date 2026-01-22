@@ -8,21 +8,18 @@ mod parameter;
 mod ranking;
 mod strategies;
 mod utils;
-mod workspace;
 
 use crate::{
     criterion::Criterion,
     direction::Direction,
-    helper::*,
     metadata::Metadata,
     parameter::Instance,
     ranking::Ranking,
     strategies::exhaustive::Exhaustive,
-    utils::{manually_move::ManuallyMove, union::Union},
-    workspace::Workspace,
+    utils::{manually_move::ManuallyMove, traits::OrNull, union::Union},
 };
 use anyhow::anyhow;
-use argh::{FromArgValue, FromArgs};
+use argh::FromArgs;
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::{Library, Symbol};
 use rand::seq::SliceRandom;
@@ -30,40 +27,6 @@ use serde::{Deserialize, Serialize};
 use signal_hook_registry::{register, register_unchecked, unregister};
 use std::{fs, io, process, ptr, sync::Arc, time::SystemTime};
 use tempdir::TempDir;
-
-trait OrNull<T> {
-    fn or_null(self) -> *mut T;
-}
-
-impl<T> OrNull<T> for Option<*mut T> {
-    fn or_null(self) -> *mut T {
-        match self {
-            Some(ptr) => ptr,
-            None => ptr::null_mut(),
-        }
-    }
-}
-
-impl FromArgValue for Direction {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value.to_lowercase().as_str() {
-            "minimize" => Ok(Direction::Minimize),
-            "maximize" => Ok(Direction::Maximize),
-            _ => Err(format!("Invalid direction: {}", value)),
-        }
-    }
-}
-
-impl FromArgValue for Criterion {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value.to_lowercase().as_str() {
-            "maximum" => Ok(Criterion::Maximum),
-            "minimum" => Ok(Criterion::Minimum),
-            "median" => Ok(Criterion::Median),
-            _ => Err(format!("Invalid criterion: {}", value)),
-        }
-    }
-}
 
 #[derive(FromArgs)]
 /// CLI Arguments
@@ -108,37 +71,11 @@ struct Options {
     verbose: bool,
 }
 
-#[derive(FromArgs, PartialEq, Debug, Clone)]
-/// exhaustive search options
-#[argh(subcommand, name = "exhaustive")]
-struct ExhaustiveSearchOptions {}
-
-#[derive(FromArgs, PartialEq, Debug, Clone)]
-/// genetic search options
-#[argh(subcommand, name = "genetic")]
-struct GeneticSearchOptions {
-    #[argh(option, short = 'i', default = "256")]
-    /// initial population size (default: 256)
-    initial: usize,
-
-    #[argh(option, short = 'n', default = "32")]
-    /// number of instances that will be made at each generation (default: 32)
-    ngeneration: usize,
-
-    #[argh(option, short = 'l', default = "256")]
-    /// maximum number of generations (default: 256)
-    limit: usize,
-
-    #[argh(option)]
-    /// output file
-    history: Option<String>,
-}
-
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand)]
 enum Strategy {
-    Exhaustive(ExhaustiveSearchOptions),
-    Genetic(GeneticSearchOptions),
+    Exhaustive(strategies::exhaustive::ExhaustiveSearchOptions),
+    Genetic(strategies::genetic::GeneticSearchOptions),
 }
 
 struct Output<'a>(&'a String, String);
@@ -172,16 +109,34 @@ impl From<strategies::genetic::State> for SavedState {
     }
 }
 
-struct Autotuner<'s> {
-    sources: &'s [String],
+struct Autotuner<'a> {
+    sources: &'a [String],
     metadata: Metadata,
     temp_dir: TempDir,
     base: Library,
-    workspace: Workspace,
+    workspace: helper::workspace::Workspace,
 }
 
-impl<'s> Autotuner<'s> {
-    fn new(sources: &'s [String], metadata: Metadata) -> anyhow::Result<Self> {
+impl<'a> Drop for Autotuner<'a> {
+    fn drop(&mut self) {
+        if let Some(ref name) = self.metadata.finalizer {
+            unsafe {
+                let finalizer = self
+                    .base
+                    .get::<helper::workspace::Finalizer>(name.as_bytes())
+                    .unwrap();
+                finalizer(
+                    self.workspace.input_ptr,
+                    self.workspace.output_ptr,
+                    self.workspace.validation_ptr.or_null(),
+                );
+            }
+        }
+    }
+}
+
+impl<'a> Autotuner<'a> {
+    fn new(sources: &'a [String], metadata: Metadata) -> anyhow::Result<Self> {
         let temp_dir = TempDir::new("autotuner")?;
         let path = temp_dir.path().join("base");
         let base = compile::compile(
@@ -189,7 +144,23 @@ impl<'s> Autotuner<'s> {
             &path,
             sources.iter().chain(metadata.compiler_arguments.iter()),
         )?;
-        let workspace = Workspace::new(&base, &metadata)?;
+        let mut workspace = helper::workspace::Workspace::default();
+        if let Some(_) = metadata.validator {
+            workspace.validation_ptr = Some(ptr::null_mut());
+        }
+
+        if let Some(ref name) = metadata.initializer {
+            unsafe {
+                let initializer = base
+                    .get::<helper::workspace::Initializer>(name.as_bytes())
+                    .unwrap();
+                initializer(
+                    &mut workspace.input_ptr,
+                    &mut workspace.output_ptr,
+                    &mut workspace.validation_ptr.or_null(),
+                );
+            }
+        }
 
         Ok(Autotuner {
             sources,
@@ -200,7 +171,7 @@ impl<'s> Autotuner<'s> {
         })
     }
 
-    fn run<'a>(
+    fn run(
         &'a self,
         direction: &Direction,
         strategy: &'a Strategy,
@@ -427,36 +398,39 @@ impl<'s> Autotuner<'s> {
 
         ManuallyMove::drop(is_canceled);
 
-        // The signal handler must be unregistered early enough.
         if let Ok(sigquit_handler) = sigquit_handler {
             unregister(sigquit_handler);
-        }
-
-        if let Some(ref name) = self.metadata.finalizer {
-            unsafe {
-                let finalizer = self.base.get::<Finalizer>(name.as_bytes()).unwrap();
-                finalizer(
-                    self.workspace.input_ptr,
-                    self.workspace.output_ptr,
-                    self.workspace.validation_ptr.or_null(),
-                );
-            }
         }
 
         output
     }
 
     fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<Vec<f64>> {
+        let mut context = helper::hook::Context::new(instance);
+        if !self.metadata.hooks.is_empty() {
+            for name in &self.metadata.hooks {
+                unsafe {
+                    let task = helper::hook::Hook::from(self.base.get(name.as_bytes())?);
+                    task.call(&mut context);
+                }
+            }
+        }
+        if context.sources.is_empty() {
+            context.sources.extend_from_slice(self.sources);
+        }
+
         let path = self.temp_dir.path().join(instance.id.as_ref());
         let lib = compile::compile(
             &self.metadata.compiler,
             &path,
-            self.sources
+            context
+                .sources
                 .iter()
                 .chain(self.metadata.compiler_arguments.iter())
                 .chain(self.metadata.profile.compiler_arguments(&instance).iter()),
         )?;
-        let evaluator: Symbol<Evaluator> = unsafe { lib.get(self.metadata.evaluator.as_bytes()) }?;
+        let evaluator: Symbol<helper::Evaluator> =
+            unsafe { lib.get(self.metadata.evaluator.as_bytes()) }?;
 
         let mut fitnesses = Vec::with_capacity(repetition);
         for _ in 0..repetition {
@@ -478,15 +452,17 @@ impl<'s> Autotuner<'s> {
             fitnesses.push(fitness);
         }
 
+        drop(lib);
+
         if let Some(block) = self.workspace.validation_ptr {
-            let validator: Symbol<Validator> =
-                unsafe { lib.get(self.metadata.validator.as_ref().unwrap().as_bytes()) }?;
+            let validator: Symbol<helper::Validator> = unsafe {
+                self.base
+                    .get(self.metadata.validator.as_ref().unwrap().as_bytes())
+            }?;
             if !unsafe { validator(block, self.workspace.output_ptr) } {
                 return Err(anyhow!("Validation failed"));
             }
         }
-
-        drop(lib);
 
         Ok(fitnesses)
     }

@@ -1,6 +1,12 @@
 use crate::parameter::{Instance, Profile, Specification, Value};
+use argh::FromArgs;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
+
+#[derive(FromArgs, PartialEq, Debug, Clone)]
+/// exhaustive search options
+#[argh(subcommand, name = "exhaustive")]
+pub(crate) struct ExhaustiveSearchOptions {}
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct State {
