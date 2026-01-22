@@ -4,6 +4,7 @@ use crate::parameter::{
 };
 use argh::FromArgs;
 use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
 #[derive(FromArgs, PartialEq, Debug, Clone)]
@@ -48,6 +49,7 @@ impl State {
 
 #[derive(Serialize)]
 pub(crate) struct GenerationSummary {
+    pub(crate) timestamp: SystemTime,
     pub(crate) best_overall: Option<ExecutionResult>,
     pub(crate) current_best: f64,
     pub(crate) current_worst: f64,
@@ -68,7 +70,9 @@ impl GenerationSummary {
         best_overall: Option<ExecutionResult>,
         (current_best, current_worst): (f64, f64),
     ) -> Self {
+        let timestamp = SystemTime::now();
         GenerationSummary {
+            timestamp,
             best_overall,
             current_best,
             current_worst,
