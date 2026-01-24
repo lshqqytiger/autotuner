@@ -12,6 +12,7 @@ mod utils;
 use crate::{
     criterion::Criterion,
     direction::Direction,
+    execution_result::IntoLogs,
     metadata::Metadata,
     parameter::Instance,
     ranking::Ranking,
@@ -240,10 +241,7 @@ impl<'a> Autotuner<'a> {
                 } else {
                     let mut output = ranking.to_vec();
                     direction.sort(&mut output);
-                    let output: Vec<_> = output
-                        .into_iter()
-                        .map(|result| (self.metadata.profile.display(&result.0), result.1))
-                        .collect();
+                    let output = output.into_logs(&self.metadata.profile);
                     first!(vec![
                         Output::new(path, output).expect("Failed to serialize object"),
                     ])
@@ -268,13 +266,14 @@ impl<'a> Autotuner<'a> {
                             .filter(|x| x.is_finite());
                         let minmax = direction.minmax(iter);
                         let summary = strategies::genetic::GenerationSummary::new(
-                            ranking.best().cloned(),
+                            ranking
+                                .best()
+                                .cloned()
+                                .map(|x| x.into_log(&self.metadata.profile)),
                             minmax,
                         );
-                        print!(
-                            "=== Generation #{} Summary ===\n{}\n\n",
-                            state.generation, summary
-                        );
+                        println!("=== Generation #{} Summary ===", state.generation);
+                        println!("{}", summary);
                         history.push(summary);
 
                         let (best, worst) = minmax;
@@ -385,10 +384,7 @@ impl<'a> Autotuner<'a> {
                 } else {
                     let mut output = ranking.to_vec();
                     direction.sort(&mut output);
-                    let output: Vec<_> = output
-                        .into_iter()
-                        .map(|result| (self.metadata.profile.display(&result.0), result.1))
-                        .collect();
+                    let output = output.into_logs(&self.metadata.profile);
                     let mut outputs =
                         vec![Output::new(path, output).expect("Failed to serialize object")];
                     if let Some(path) = &options.history {

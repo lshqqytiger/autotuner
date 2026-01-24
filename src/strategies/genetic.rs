@@ -1,4 +1,4 @@
-use crate::execution_result::ExecutionResult;
+use crate::execution_result::ExecutionLog;
 use crate::parameter::{
     Instance, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
@@ -49,16 +49,19 @@ impl State {
 
 #[derive(Serialize)]
 pub(crate) struct GenerationSummary {
-    pub(crate) timestamp: SystemTime,
-    pub(crate) best_overall: Option<ExecutionResult>,
+    pub(crate) timestamp: u64,
+    pub(crate) best_overall: Option<ExecutionLog>,
     pub(crate) current_best: f64,
     pub(crate) current_worst: f64,
 }
 
 impl fmt::Display for GenerationSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Best overall: ")?;
         if let Some(best_overall) = &self.best_overall {
-            writeln!(f, "Best overall: {} ms", best_overall.1)?;
+            writeln!(f, "{} ms", best_overall.1)?;
+        } else {
+            writeln!(f, "N/A")?;
         }
         writeln!(f, "Best: {} ms", self.current_best)?;
         writeln!(f, "Worst: {} ms", self.current_worst)
@@ -67,10 +70,10 @@ impl fmt::Display for GenerationSummary {
 
 impl GenerationSummary {
     pub(crate) fn new(
-        best_overall: Option<ExecutionResult>,
+        best_overall: Option<ExecutionLog>,
         (current_best, current_worst): (f64, f64),
     ) -> Self {
-        let timestamp = SystemTime::now();
+        let timestamp = SystemTime::now().elapsed().unwrap().as_secs();
         GenerationSummary {
             timestamp,
             best_overall,
