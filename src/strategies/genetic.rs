@@ -73,7 +73,10 @@ impl GenerationSummary {
         best_overall: Option<ExecutionLog>,
         (current_best, current_worst): (f64, f64),
     ) -> Self {
-        let timestamp = SystemTime::now().elapsed().unwrap().as_secs();
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         GenerationSummary {
             timestamp,
             best_overall,
