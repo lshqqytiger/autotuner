@@ -140,11 +140,12 @@ impl<'a> Autotuner<'a> {
     fn new(sources: &'a [String], metadata: Metadata) -> anyhow::Result<Self> {
         let temp_dir = TempDir::new("autotuner")?;
         let path = temp_dir.path().join("base");
-        let base = compile::compile(
+        compile::compile(
             &metadata.compiler,
             &path,
             sources.iter().chain(metadata.compiler_arguments.iter()),
         )?;
+        let base = unsafe { Library::new(&path) }?;
         let mut workspace = helper::workspace::Workspace::default();
         if metadata.validator.is_some() {
             workspace.validation_ptr = Some(ptr::null_mut());
@@ -406,7 +407,12 @@ impl<'a> Autotuner<'a> {
     }
 
     fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<Vec<f64>> {
-        let mut context = helper::hook::Context::new(instance);
+        let path = self.temp_dir.path().join(instance.id.as_ref());
+        if !path.exists() {
+            fs::create_dir(&path)?;
+        }
+
+        let mut context = helper::hook::Context::new(instance, path.as_os_str().as_encoded_bytes());
         if !self.metadata.hooks.is_empty() {
             for name in &self.metadata.hooks {
                 unsafe {
@@ -419,16 +425,20 @@ impl<'a> Autotuner<'a> {
             context.sources.extend_from_slice(self.sources);
         }
 
-        let path = self.temp_dir.path().join(instance.id.as_ref());
-        let lib = compile::compile(
-            &self.metadata.compiler,
-            &path,
-            context
-                .sources
-                .iter()
-                .chain(self.metadata.compiler_arguments.iter())
-                .chain(self.metadata.profile.compiler_arguments(&instance).iter()),
-        )?;
+        let path = path.join("lib.so");
+        if !path.exists() {
+            compile::compile(
+                &self.metadata.compiler,
+                &path,
+                context
+                    .sources
+                    .iter()
+                    .chain(self.metadata.compiler_arguments.iter())
+                    .chain(context.arguments.iter())
+                    .chain(self.metadata.profile.compiler_arguments(&instance).iter()),
+            )?;
+        }
+        let lib = unsafe { Library::new(&path) }?;
         let evaluator: Symbol<helper::Evaluator> =
             unsafe { lib.get(self.metadata.evaluator.as_bytes()) }?;
 
