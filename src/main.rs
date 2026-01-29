@@ -419,6 +419,9 @@ impl<'a> Autotuner<'a> {
                     let task = helper::hook::Hook::from(self.base.get(name.as_bytes())?);
                     task.call(&mut context);
                 }
+                if context.invalidated {
+                    return Err(anyhow!("Instance invalidated by hook"));
+                }
             }
         }
         if context.sources.is_empty() {
