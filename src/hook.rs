@@ -2,6 +2,7 @@ use crate::{
     context::{self, Context},
     parameter::Value,
     utils::interner::Intern,
+    workspace::Workspace,
 };
 use libloading::Symbol;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ pub(crate) struct Configuration {
 
 type Function = unsafe extern "C" fn(
     ctx: *mut Context,
+    ws: *const Workspace,
     get: extern "C" fn(id: ffi::c_int) -> *const ffi::c_void,
 );
 
@@ -27,9 +29,9 @@ impl<'a> From<Symbol<'a, Function>> for Hook<'a> {
 }
 
 impl<'a> Hook<'a> {
-    pub(crate) fn call(&self, context: &mut Context) {
+    pub(crate) fn call(&self, context: &mut Context, workspace: &Workspace) {
         unsafe {
-            self.0(context as _, get as _);
+            self.0(context as _, workspace as _, get as _);
         }
     }
 }
@@ -37,9 +39,14 @@ impl<'a> Hook<'a> {
 #[repr(u32)]
 enum Interface {
     TempDir = 0x00,
-    GetInt = 0x01,
-    AppendArgument = 0x10,
-    Invalidate = 0x20,
+
+    ParameterGetInt = 0x10,
+
+    WorkspaceGetPtr = 0x20,
+
+    AppendArgument = 0x30,
+
+    Invalidate = 0x40,
 }
 
 impl TryFrom<ffi::c_int> for Interface {
@@ -48,7 +55,8 @@ impl TryFrom<ffi::c_int> for Interface {
     fn try_from(value: ffi::c_int) -> Result<Self, Self::Error> {
         match value {
             x if x == Interface::TempDir as ffi::c_int => Ok(Interface::TempDir),
-            x if x == Interface::GetInt as ffi::c_int => Ok(Interface::GetInt),
+            x if x == Interface::ParameterGetInt as ffi::c_int => Ok(Interface::ParameterGetInt),
+            x if x == Interface::WorkspaceGetPtr as ffi::c_int => Ok(Interface::WorkspaceGetPtr),
             x if x == Interface::AppendArgument as ffi::c_int => Ok(Interface::AppendArgument),
             x if x == Interface::Invalidate as ffi::c_int => Ok(Interface::Invalidate),
             _ => Err(()),
@@ -59,7 +67,8 @@ impl TryFrom<ffi::c_int> for Interface {
 extern "C" fn get(id: ffi::c_int) -> *const ffi::c_void {
     match Interface::try_from(id) {
         Ok(Interface::TempDir) => temp_dir as *const ffi::c_void,
-        Ok(Interface::GetInt) => get_int as *const ffi::c_void,
+        Ok(Interface::ParameterGetInt) => parameter_get_int as *const ffi::c_void,
+        Ok(Interface::WorkspaceGetPtr) => workspace_get_ptr as *const ffi::c_void,
         Ok(Interface::AppendArgument) => append_argument as *const ffi::c_void,
         Ok(Interface::Invalidate) => invalidate as *const ffi::c_void,
         _ => ptr::null(),
@@ -79,7 +88,7 @@ extern "C" fn temp_dir(ctx: *mut Context, ptr: *mut ffi::c_char, size: usize) {
     }
 }
 
-extern "C" fn get_int(ctx: *mut Context, name: *const ffi::c_char) -> *const ffi::c_int {
+extern "C" fn parameter_get_int(ctx: *mut Context, name: *const ffi::c_char) -> *const ffi::c_int {
     let ctx = if let Some(ctx) = unsafe { ctx.as_ref() } {
         ctx
     } else {
@@ -92,6 +101,27 @@ extern "C" fn get_int(ctx: *mut Context, name: *const ffi::c_char) -> *const ffi
             .intern(),
     ) {
         x as *const i32
+    } else {
+        ptr::null()
+    }
+}
+
+extern "C" fn workspace_get_ptr(
+    ws: *const Workspace,
+    name: *const ffi::c_char,
+) -> *const *mut ffi::c_void {
+    let ws = if let Some(ws) = unsafe { ws.as_ref() } {
+        ws
+    } else {
+        return ptr::null();
+    };
+    let name = if let Some(name) = unsafe { ffi::CStr::from_ptr(name).to_str().ok() } {
+        name
+    } else {
+        return ptr::null();
+    };
+    if let Some(ptr) = ws.0.get(name) {
+        ptr
     } else {
         ptr::null()
     }

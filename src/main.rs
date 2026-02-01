@@ -419,7 +419,7 @@ impl<'a> Autotuner<'a> {
         for name in &self.metadata.hooks.pre {
             unsafe {
                 let task = self.hook.get::<Hook>(name.as_bytes())?;
-                task.call(&mut context);
+                task.call(&mut context, &self.workspace);
             }
         }
         if let context::Result::Invalid = context.result {
@@ -468,7 +468,7 @@ impl<'a> Autotuner<'a> {
         for name in &self.metadata.hooks.post {
             unsafe {
                 let task = self.hook.get::<Hook>(name.as_bytes())?;
-                task.call(&mut context);
+                task.call(&mut context, &self.workspace);
             }
         }
 

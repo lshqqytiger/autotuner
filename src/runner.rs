@@ -26,7 +26,8 @@ impl<'a> Runner<'a> {
 
 #[repr(u32)]
 enum Interface {
-    GetPtr = 0x00,
+    WorkspaceGetPtr = 0x00,
+
     Result = 0x10,
 }
 
@@ -35,7 +36,7 @@ impl TryFrom<ffi::c_int> for Interface {
 
     fn try_from(value: ffi::c_int) -> Result<Self, Self::Error> {
         match value {
-            x if x == Interface::GetPtr as ffi::c_int => Ok(Interface::GetPtr),
+            x if x == Interface::WorkspaceGetPtr as ffi::c_int => Ok(Interface::WorkspaceGetPtr),
             x if x == Interface::Result as ffi::c_int => Ok(Interface::Result),
             _ => Err(()),
         }
@@ -44,27 +45,30 @@ impl TryFrom<ffi::c_int> for Interface {
 
 extern "C" fn get(id: ffi::c_int) -> *const ffi::c_void {
     match Interface::try_from(id) {
-        Ok(Interface::GetPtr) => get_ptr as *const ffi::c_void,
+        Ok(Interface::WorkspaceGetPtr) => workspace_get_ptr as *const ffi::c_void,
         Ok(Interface::Result) => result as *const ffi::c_void,
         _ => ptr::null(),
     }
 }
 
-extern "C" fn get_ptr(ws: *const Workspace, name: *const ffi::c_char) -> *mut ffi::c_void {
+extern "C" fn workspace_get_ptr(
+    ws: *const Workspace,
+    name: *const ffi::c_char,
+) -> *const *mut ffi::c_void {
     let ws = if let Some(ws) = unsafe { ws.as_ref() } {
         ws
     } else {
-        return ptr::null_mut();
+        return ptr::null();
     };
     let name = if let Some(name) = unsafe { ffi::CStr::from_ptr(name).to_str().ok() } {
         name
     } else {
-        return ptr::null_mut();
+        return ptr::null();
     };
     if let Some(ptr) = ws.0.get(name) {
-        *ptr
+        ptr
     } else {
-        ptr::null_mut()
+        ptr::null()
     }
 }
 
