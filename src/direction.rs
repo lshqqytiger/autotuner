@@ -1,17 +1,37 @@
 use crate::execution_result::ExecutionResult;
-use argh::FromArgValue;
+use serde::{Deserialize, Serialize};
 
 pub(crate) enum Direction {
     Minimize,
     Maximize,
 }
 
-impl FromArgValue for Direction {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value.to_lowercase().as_str() {
+impl Serialize for Direction {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let s = match self {
+            Direction::Minimize => "minimize",
+            Direction::Maximize => "maximize",
+        };
+        serializer.serialize_str(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Direction {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.to_lowercase().as_str() {
             "minimize" => Ok(Direction::Minimize),
             "maximize" => Ok(Direction::Maximize),
-            _ => Err(format!("Invalid direction: {}", value)),
+            _ => Err(serde::de::Error::unknown_variant(
+                &s,
+                &["minimize", "maximize"],
+            )),
         }
     }
 }

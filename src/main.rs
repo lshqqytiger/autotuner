@@ -1,32 +1,39 @@
 mod compile;
+mod context;
 mod criterion;
 mod direction;
 mod execution_result;
 mod helper;
+mod hook;
 mod metadata;
 mod parameter;
 mod ranking;
+mod runner;
 mod strategies;
 mod utils;
+mod workspace;
 
 use crate::{
-    criterion::Criterion,
+    context::Context,
     direction::Direction,
     execution_result::IntoLogs,
+    helper::Helper,
+    hook::Hook,
     metadata::Metadata,
     parameter::Instance,
     ranking::Ranking,
+    runner::Runner,
     strategies::exhaustive::Exhaustive,
-    utils::{manually_move::ManuallyMove, signal, traits::OrNull, union::Union},
+    utils::{manually_move::ManuallyMove, signal, union::Union},
 };
 use anyhow::anyhow;
 use argh::FromArgs;
 use libc::{SIGQUIT, SIGSEGV};
-use libloading::{Library, Symbol};
+use libloading::Library;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, io, process, ptr, sync::Arc, time::SystemTime};
+use std::{fs, io, process, sync::Arc, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -35,21 +42,21 @@ struct Options {
     #[argh(positional)]
     sources: Vec<String>,
 
+    #[argh(option)]
+    /// source codes
+    helper: Vec<String>,
+
+    #[argh(option)]
+    /// source codes
+    hook: Vec<String>,
+
     #[argh(option, short = 'm')]
     /// metadata file (required)
     metadata: String,
 
-    #[argh(option, short = 'd', default = "Direction::Maximize")]
-    /// optimization direction (default: maximize)
-    direction: Direction,
-
     #[argh(subcommand)]
     /// search strategy (default: genetic)
     strategy: Strategy,
-
-    #[argh(option, short = 'c', default = "Criterion::Maximum")]
-    /// criterion to aggregate multiple runs (default: maximum)
-    criterion: Criterion,
 
     #[argh(option, short = 'r', default = "15")]
     /// number of repetitions for each instance (default: 15)
@@ -114,74 +121,70 @@ struct Autotuner<'a> {
     sources: &'a [String],
     metadata: Metadata,
     temp_dir: TempDir,
-    base: Library,
-    workspace: helper::workspace::Workspace,
+    helper: Library,
+    hook: Library,
+    workspace: workspace::Workspace<'a>,
 }
 
 impl<'a> Drop for Autotuner<'a> {
     fn drop(&mut self) {
-        if let Some(ref name) = self.metadata.finalizer {
-            unsafe {
-                let finalizer = self
-                    .base
-                    .get::<helper::workspace::Finalizer>(name.as_bytes())
-                    .unwrap();
-                finalizer(
-                    self.workspace.input_ptr,
-                    self.workspace.output_ptr,
-                    self.workspace.validation_ptr.or_null(),
-                );
-            }
+        unsafe {
+            let helper = self
+                .helper
+                .get::<Helper>(self.metadata.helper.post.as_bytes())
+                .unwrap();
+            helper.call(&mut self.workspace);
         }
     }
 }
 
 impl<'a> Autotuner<'a> {
-    fn new(sources: &'a [String], metadata: Metadata) -> anyhow::Result<Self> {
+    fn new(
+        sources: &'a [String],
+        helper: &'a [String],
+        hook: &'a [String],
+        metadata: Metadata,
+    ) -> anyhow::Result<Self> {
         let temp_dir = TempDir::new("autotuner")?;
-        let path = temp_dir.path().join("base");
+
+        let path = temp_dir.path().join("libhelper.so");
         compile::compile(
             &metadata.compiler,
             &path,
-            sources.iter().chain(metadata.compiler_arguments.iter()),
+            helper.iter().chain(metadata.compiler_arguments.iter()),
         )?;
-        let base = unsafe { Library::new(&path) }?;
-        let mut workspace = helper::workspace::Workspace::default();
-        if metadata.validator.is_some() {
-            workspace.validation_ptr = Some(ptr::null_mut());
-        }
+        let helper = unsafe { Library::new(&path) }?;
 
-        if let Some(ref name) = metadata.initializer {
-            unsafe {
-                let initializer = base
-                    .get::<helper::workspace::Initializer>(name.as_bytes())
-                    .unwrap();
-                initializer(
-                    &mut workspace.input_ptr,
-                    &mut workspace.output_ptr,
-                    if let Some(ref mut ptr) = workspace.validation_ptr {
-                        ptr
-                    } else {
-                        ptr::null_mut()
-                    },
-                );
-            }
+        let path = temp_dir.path().join("libhook.so");
+        compile::compile(
+            &metadata.compiler,
+            &path,
+            hook.iter().chain(metadata.compiler_arguments.iter()),
+        )?;
+        let hook = unsafe { Library::new(&path) }?;
+
+        let mut workspace = workspace::Workspace::new();
+
+        unsafe {
+            let initializer = helper
+                .get::<Helper>(metadata.helper.pre.as_bytes())
+                .unwrap();
+            initializer.call(&mut workspace);
         }
 
         Ok(Autotuner {
             sources,
             metadata,
             temp_dir,
-            base,
+            helper,
+            hook,
             workspace,
         })
     }
 
     fn run(
         &'a self,
-        direction: &Direction,
         strategy: &'a Strategy,
-        criterion: &Criterion,
         repetition: usize,
         candidates: usize,
         state: Option<SavedState>,
@@ -199,7 +202,7 @@ impl<'a> Autotuner<'a> {
 
         let output = match strategy {
             Strategy::Exhaustive(_) => {
-                let mut ranking = Ranking::new(direction, candidates);
+                let mut ranking = Ranking::new(&self.metadata.direction, candidates);
                 let mut state = if let Some(SavedState::Exhaustive(state)) = state {
                     state
                 } else {
@@ -215,8 +218,8 @@ impl<'a> Autotuner<'a> {
                     println!("{}/{}: ", count, self.metadata.profile.len());
 
                     let result = match self.evaluate(&instance, repetition) {
-                        Ok(values) => criterion.extract_representative(values),
-                        Err(_) => f64::INFINITY,
+                        Ok(x) => x,
+                        Err(e) => panic!("{}", e),
                     };
 
                     println!("{} ms", result);
@@ -241,7 +244,7 @@ impl<'a> Autotuner<'a> {
                     second!(state.into())
                 } else {
                     let mut output = ranking.to_vec();
-                    direction.sort(&mut output);
+                    self.metadata.direction.sort(&mut output);
                     let output = output.into_logs(&self.metadata.profile);
                     first!(vec![
                         Output::new(path, output).expect("Failed to serialize object"),
@@ -249,7 +252,7 @@ impl<'a> Autotuner<'a> {
                 }
             }
             Strategy::Genetic(options) => {
-                let mut ranking = Ranking::new(direction, candidates);
+                let mut ranking = Ranking::new(&self.metadata.direction, candidates);
                 let mut state = if let Some(SavedState::Genetic(state)) = state {
                     state
                 } else {
@@ -265,7 +268,7 @@ impl<'a> Autotuner<'a> {
                             .iter()
                             .map(|(x, _)| *x)
                             .filter(|x| x.is_finite());
-                        let minmax = direction.minmax(iter);
+                        let minmax = self.metadata.direction.minmax(iter);
                         let summary = strategies::genetic::GenerationSummary::new(
                             ranking
                                 .best()
@@ -285,7 +288,7 @@ impl<'a> Autotuner<'a> {
                                 continue;
                             }
 
-                            pair.0 = match direction {
+                            pair.0 = match self.metadata.direction {
                                 Direction::Minimize => pair.0,
                                 Direction::Maximize => worst - pair.0,
                             };
@@ -303,7 +306,7 @@ impl<'a> Autotuner<'a> {
                                 continue;
                             }
 
-                            result.0 = match direction {
+                            result.0 = match self.metadata.direction {
                                 Direction::Minimize => worst - result.0,
                                 Direction::Maximize => result.0,
                             };
@@ -353,8 +356,8 @@ impl<'a> Autotuner<'a> {
                         );
 
                         let result = match self.evaluate(&fresh_instances[i].1, repetition) {
-                            Ok(values) => criterion.extract_representative(values),
-                            Err(_) => f64::INFINITY,
+                            Ok(x) => x,
+                            Err(e) => panic!("{}", e),
                         };
                         println!("{} ms", result);
                         if verbose {
@@ -384,7 +387,7 @@ impl<'a> Autotuner<'a> {
                     second!(state.into())
                 } else {
                     let mut output = ranking.to_vec();
-                    direction.sort(&mut output);
+                    self.metadata.direction.sort(&mut output);
                     let output = output.into_logs(&self.metadata.profile);
                     let mut outputs =
                         vec![Output::new(path, output).expect("Failed to serialize object")];
@@ -406,35 +409,29 @@ impl<'a> Autotuner<'a> {
         output
     }
 
-    fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<Vec<f64>> {
+    fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<f64> {
         let path = self.temp_dir.path().join(instance.id.as_ref());
         if !path.exists() {
             fs::create_dir(&path)?;
         }
 
-        let mut context = helper::hook::Context::new(instance, path.as_os_str().as_encoded_bytes());
-        if !self.metadata.hooks.is_empty() {
-            for name in &self.metadata.hooks {
-                unsafe {
-                    let task = helper::hook::Hook::from(self.base.get(name.as_bytes())?);
-                    task.call(&mut context);
-                }
-                if context.invalidated {
-                    return Err(anyhow!("Instance invalidated by hook"));
-                }
+        let mut context = Context::new(instance, path.as_os_str().as_encoded_bytes());
+        for name in &self.metadata.hooks.pre {
+            unsafe {
+                let task = self.hook.get::<Hook>(name.as_bytes())?;
+                task.call(&mut context);
             }
         }
-        if context.sources.is_empty() {
-            context.sources.extend_from_slice(self.sources);
+        if let context::Result::Invalid = context.result {
+            return Ok(self.metadata.criterion.invalid());
         }
 
-        let path = path.join("lib.so");
+        let path = path.join("librunner.so");
         if !path.exists() {
             compile::compile(
                 &self.metadata.compiler,
                 &path,
-                context
-                    .sources
+                self.sources
                     .iter()
                     .chain(self.metadata.compiler_arguments.iter())
                     .chain(context.arguments.iter())
@@ -442,23 +439,22 @@ impl<'a> Autotuner<'a> {
             )?;
         }
         let lib = unsafe { Library::new(&path) }?;
-        let evaluator: Symbol<helper::Evaluator> =
-            unsafe { lib.get(self.metadata.evaluator.as_bytes()) }?;
+        let runner = unsafe { lib.get::<Runner>(self.metadata.runner.as_bytes())? };
 
         let mut fitnesses = Vec::with_capacity(repetition);
         for _ in 0..repetition {
-            let fitness = unsafe {
+            unsafe {
                 let result = register_unchecked(SIGSEGV, |_| {
                     // can we do better than this?
                     println!("Segmentation fault occurred during evaluation");
                     process::exit(1);
                 });
-                let fitness = evaluator(self.workspace.input_ptr, self.workspace.output_ptr);
+                runner.call(&mut context, &self.workspace);
                 if let Ok(id) = result {
                     unregister(id);
                 }
-                fitness
             };
+            let fitness = context.result.anyhow(&self.metadata.criterion)?;
             if fitness.is_nan() {
                 return Err(anyhow!("NaN value encountered"));
             }
@@ -467,17 +463,16 @@ impl<'a> Autotuner<'a> {
 
         drop(lib);
 
-        if let Some(block) = self.workspace.validation_ptr {
-            let validator: Symbol<helper::Validator> = unsafe {
-                self.base
-                    .get(self.metadata.validator.as_ref().unwrap().as_bytes())
-            }?;
-            if !unsafe { validator(block, self.workspace.output_ptr) } {
-                return Err(anyhow!("Validation failed"));
+        context.result = context::Result::Valid(self.metadata.criterion.representative(fitnesses));
+
+        for name in &self.metadata.hooks.post {
+            unsafe {
+                let task = self.hook.get::<Hook>(name.as_bytes())?;
+                task.call(&mut context);
             }
         }
 
-        Ok(fitnesses)
+        context.result.anyhow(&self.metadata.criterion)
     }
 }
 
@@ -504,16 +499,14 @@ fn main() -> anyhow::Result<()> {
     let metadata =
         serde_json::from_str::<Metadata>(&metadata).expect("Failed to parse metadata file");
 
-    let autotuner = Autotuner::new(&args.sources, metadata)?;
+    let autotuner = Autotuner::new(&args.sources, &args.helper, &args.hook, metadata)?;
     let state = args.continue_.as_ref().map(|filename| {
         let content = fs::read_to_string(filename).expect("Failed to read saved state file");
         serde_json::from_str::<SavedState>(&content).expect("Failed to parse saved state file")
     });
     match_union!(
         autotuner.run(
-            &args.direction,
             &args.strategy,
-            &args.criterion,
             args.repetition,
             args.candidates,
             state,
