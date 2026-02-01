@@ -42,11 +42,11 @@ struct Options {
     #[argh(positional)]
     sources: Vec<String>,
 
-    #[argh(option)]
+    #[argh(option, default = "Vec::new()")]
     /// source codes
     helper: Vec<String>,
 
-    #[argh(option)]
+    #[argh(option, default = "Vec::new()")]
     /// source codes
     hook: Vec<String>,
 
