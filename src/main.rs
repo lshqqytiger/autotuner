@@ -147,6 +147,8 @@ impl<'a> Autotuner<'a> {
     ) -> anyhow::Result<Self> {
         let temp_dir = TempDir::new("autotuner")?;
 
+        fs::create_dir(temp_dir.path().join("instances"))?;
+
         let path = temp_dir.path().join("libhelper.so");
         compile::compile(
             &metadata.compiler,
@@ -410,12 +412,9 @@ impl<'a> Autotuner<'a> {
     }
 
     fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<f64> {
-        let path = self.temp_dir.path().join(instance.id.as_ref());
-        if !path.exists() {
-            fs::create_dir(&path)?;
-        }
+        let temp_dir = self.temp_dir.path();
 
-        let mut context = Context::new(instance, path.as_os_str().as_encoded_bytes());
+        let mut context = Context::new(instance, temp_dir.as_os_str().as_encoded_bytes());
         for name in &self.metadata.hooks.pre {
             unsafe {
                 let task = self.hook.get::<Hook>(name.as_bytes())?;
@@ -426,7 +425,10 @@ impl<'a> Autotuner<'a> {
             return Ok(self.metadata.criterion.invalid());
         }
 
-        let path = path.join("librunner.so");
+        let path = temp_dir
+            .join("instances")
+            .join(instance.id.as_ref())
+            .with_extension("so");
         if !path.exists() {
             compile::compile(
                 &self.metadata.compiler,
