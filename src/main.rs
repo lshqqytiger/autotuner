@@ -224,7 +224,7 @@ impl<'a> Autotuner<'a> {
                         Err(e) => panic!("{}", e),
                     };
 
-                    println!("{} ms", result);
+                    println!("{}", result);
                     if verbose {
                         println!("{}", self.metadata.profile.display(&instance));
                     }
@@ -361,7 +361,7 @@ impl<'a> Autotuner<'a> {
                             Ok(x) => x,
                             Err(e) => panic!("{}", e),
                         };
-                        println!("{} ms", result);
+                        println!("{}", result);
                         if verbose {
                             println!("{}", self.metadata.profile.display(&fresh_instances[i].1));
                         }
