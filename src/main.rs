@@ -258,14 +258,16 @@ impl<'a> Autotuner<'a> {
                 let mut state = if let Some(SavedState::Genetic(state)) = state {
                     state
                 } else {
-                    strategies::genetic::State::new(&self.metadata.profile, options.initial)
+                    strategies::genetic::State::default()
                 };
                 let mut history = Vec::new();
 
                 let mut evaluation_results: Vec<(f64, usize)> = Vec::with_capacity(options.initial);
                 let mut rng = rand::rng();
                 while state.generation < options.limit {
-                    if !evaluation_results.is_empty() {
+                    if evaluation_results.is_empty() {
+                        state.initialize(&self.metadata.profile, options.initial);
+                    } else {
                         let iter = evaluation_results
                             .iter()
                             .map(|(x, _)| *x)
@@ -283,6 +285,11 @@ impl<'a> Autotuner<'a> {
                         history.push(summary);
 
                         let (best, worst) = minmax;
+                        if best.is_infinite() {
+                            evaluation_results.clear();
+                            continue;
+                        }
+
                         let mut inversed = evaluation_results.clone();
                         for pair in &mut inversed {
                             if pair.0.is_infinite() {

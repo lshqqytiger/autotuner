@@ -34,15 +34,20 @@ pub(crate) struct State {
     pub(crate) instances: Vec<Arc<Instance>>,
 }
 
-impl State {
-    pub(crate) fn new(profile: &Profile, initial: usize) -> Self {
-        let mut instances = Vec::with_capacity(initial);
-        for _ in 0..initial {
-            instances.push(Arc::new(random(profile)));
-        }
+impl Default for State {
+    fn default() -> Self {
         State {
             generation: 0,
-            instances,
+            instances: Vec::new(),
+        }
+    }
+}
+
+impl State {
+    pub(crate) fn initialize(&mut self, profile: &Profile, initial: usize) {
+        self.instances.clear();
+        for _ in 0..initial {
+            self.instances.push(Arc::new(random(profile)));
         }
     }
 }
