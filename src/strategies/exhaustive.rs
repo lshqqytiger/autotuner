@@ -39,8 +39,7 @@ impl Iterator for State {
             {
                 self.values[index] = next_value;
                 for reset_index in index + 1..self.values.len() {
-                    self.values[reset_index] =
-                        self.specifications[reset_index].get_space().default();
+                    self.values[reset_index] = self.specifications[reset_index].get_space().first();
                 }
                 return Some(instance);
             }
@@ -64,7 +63,7 @@ impl Exhaustive for Profile {
             .collect::<Vec<Arc<Specification>>>();
         let values = specifications
             .iter()
-            .map(|specification| specification.get_space().default())
+            .map(|specification| specification.get_space().first())
             .collect::<Vec<Value>>();
         State {
             names,

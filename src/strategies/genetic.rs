@@ -47,7 +47,15 @@ impl State {
     pub(crate) fn initialize(&mut self, profile: &Profile, initial: usize) {
         self.instances.clear();
         for _ in 0..initial {
-            self.instances.push(Arc::new(random(profile)));
+            self.instances.push(Arc::new(Instance::new(
+                profile
+                    .0
+                    .iter()
+                    .map(|(name, parameter)| {
+                        (name.clone(), parameter.get_space().default_or_random())
+                    })
+                    .collect::<BTreeMap<Arc<str>, Value>>(),
+            )));
         }
     }
 }
@@ -116,7 +124,7 @@ trait GeneticSpace {
 impl GeneticSpace for IntegerSpace {
     fn crossover(&self, a: &Value, b: &Value) -> Value {
         match (self, a, b) {
-            (IntegerSpace::Sequence(_, _), Value::Integer(a), Value::Integer(b)) => {
+            (IntegerSpace::Sequence(_, _, _), Value::Integer(a), Value::Integer(b)) => {
                 Value::Integer((*a + *b) / 2)
             }
             (IntegerSpace::Candidates(_), Value::Index(a), Value::Index(b)) => {
@@ -132,7 +140,7 @@ impl GeneticSpace for IntegerSpace {
 
     fn mutate(&self, code: &mut Value) {
         match (self, code) {
-            (IntegerSpace::Sequence(start, end), Value::Integer(n)) => {
+            (IntegerSpace::Sequence(start, end, _), Value::Integer(n)) => {
                 // 10% chance to completely randomize the value
                 if rand::random_bool(0.1) {
                     *n = rand::random_range(*start..=*end);
@@ -213,16 +221,6 @@ impl GeneticSpace for KeywordSpace {
             *code = self.random();
         }
     }
-}
-
-pub(crate) fn random(profile: &Profile) -> Instance {
-    Instance::new(
-        profile
-            .0
-            .iter()
-            .map(|(name, parameter)| (name.clone(), parameter.get_space().random()))
-            .collect::<BTreeMap<Arc<str>, Value>>(),
-    )
 }
 
 pub(crate) fn crossover(profile: &Profile, a: &Instance, b: &Instance) -> Instance {

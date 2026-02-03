@@ -4,23 +4,40 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, convert::Infallible, hash::Hash, str::FromStr, sync::Arc};
 
 pub(crate) trait Space {
-    fn default(&self) -> Value;
+    fn first(&self) -> Value;
+
     fn random(&self) -> Value;
+
+    #[inline]
+    fn default(&self) -> Option<Value> {
+        None
+    }
+
+    #[inline]
+    fn default_or_random(&self) -> Value {
+        if let Some(v) = self.default() {
+            v
+        } else {
+            self.random()
+        }
+    }
+
     fn next(&self, current: &Value) -> Option<Value>;
+
     fn len(&self) -> usize;
 }
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum IntegerSpace {
-    Sequence(i32, i32),
+    Sequence(i32, i32, #[serde(default)] Option<i32>),
     Candidates(Vec<i32>),
 }
 
 impl Space for IntegerSpace {
     #[inline]
-    fn default(&self) -> Value {
+    fn first(&self) -> Value {
         match self {
-            IntegerSpace::Sequence(start, _) => Value::Integer(*start),
+            IntegerSpace::Sequence(start, _, _) => Value::Integer(*start),
             IntegerSpace::Candidates(_) => Value::Index(0),
         }
     }
@@ -28,16 +45,26 @@ impl Space for IntegerSpace {
     #[inline]
     fn random(&self) -> Value {
         match self {
-            IntegerSpace::Sequence(start, end) => Value::Integer(rand::random_range(*start..=*end)),
+            IntegerSpace::Sequence(start, end, _) => {
+                Value::Integer(rand::random_range(*start..=*end))
+            }
             IntegerSpace::Candidates(candidates) => {
                 Value::Index(rand::random_range(0..candidates.len()))
             }
         }
     }
 
+    #[inline]
+    fn default(&self) -> Option<Value> {
+        match self {
+            IntegerSpace::Sequence(_, _, default) => default.map(Value::Integer),
+            IntegerSpace::Candidates(_) => None,
+        }
+    }
+
     fn next(&self, current: &Value) -> Option<Value> {
         match (self, current) {
-            (IntegerSpace::Sequence(_, end), Value::Integer(n)) => {
+            (IntegerSpace::Sequence(_, end, _), Value::Integer(n)) => {
                 if *n < *end {
                     Some(Value::Integer(n + 1))
                 } else {
@@ -58,7 +85,7 @@ impl Space for IntegerSpace {
     #[inline]
     fn len(&self) -> usize {
         match self {
-            IntegerSpace::Sequence(start, end) => (*end - *start + 1) as usize,
+            IntegerSpace::Sequence(start, end, _) => (*end - *start + 1) as usize,
             IntegerSpace::Candidates(candidates) => candidates.len(),
         }
     }
@@ -68,7 +95,7 @@ pub(crate) struct SwitchSpace {}
 
 impl Space for SwitchSpace {
     #[inline]
-    fn default(&self) -> Value {
+    fn first(&self) -> Value {
         Value::Switch(false)
     }
 
@@ -101,7 +128,7 @@ pub(crate) struct KeywordSpace(pub(crate) Vec<String>);
 
 impl Space for KeywordSpace {
     #[inline]
-    fn default(&self) -> Value {
+    fn first(&self) -> Value {
         Value::Index(0)
     }
 
@@ -207,7 +234,7 @@ impl Profile {
                 (
                     Specification::Integer {
                         transformer: Some(transformer),
-                        space: IntegerSpace::Sequence(_, _),
+                        space: IntegerSpace::Sequence(_, _, _),
                     },
                     Value::Integer(x),
                 ) => {
@@ -216,7 +243,7 @@ impl Profile {
                 (
                     Specification::Integer {
                         transformer: None,
-                        space: IntegerSpace::Sequence(_, _),
+                        space: IntegerSpace::Sequence(_, _, _),
                     },
                     Value::Integer(x),
                 ) => {
@@ -264,14 +291,14 @@ impl Profile {
                     (
                         Specification::Integer {
                             transformer: Some(transformer),
-                            space: IntegerSpace::Sequence(_, _),
+                            space: IntegerSpace::Sequence(_, _, _),
                         },
                         Value::Integer(x),
                     ) => transformer.apply(x),
                     (
                         Specification::Integer {
                             transformer: None,
-                            space: IntegerSpace::Sequence(_, _),
+                            space: IntegerSpace::Sequence(_, _, _),
                         },
                         Value::Integer(x),
                     ) => x.to_string(),
