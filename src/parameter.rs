@@ -30,7 +30,7 @@ pub(crate) trait Space {
 #[derive(Serialize, Deserialize)]
 pub(crate) enum IntegerSpace {
     Sequence(i32, i32, #[serde(default)] Option<i32>),
-    Candidates(Vec<i32>),
+    Candidates(Vec<i32>, #[serde(default)] Option<usize>),
 }
 
 impl Space for IntegerSpace {
@@ -38,7 +38,7 @@ impl Space for IntegerSpace {
     fn first(&self) -> Value {
         match self {
             IntegerSpace::Sequence(start, _, _) => Value::Integer(*start),
-            IntegerSpace::Candidates(_) => Value::Index(0),
+            IntegerSpace::Candidates(_, _) => Value::Index(0),
         }
     }
 
@@ -48,7 +48,7 @@ impl Space for IntegerSpace {
             IntegerSpace::Sequence(start, end, _) => {
                 Value::Integer(rand::random_range(*start..=*end))
             }
-            IntegerSpace::Candidates(candidates) => {
+            IntegerSpace::Candidates(candidates, _) => {
                 Value::Index(rand::random_range(0..candidates.len()))
             }
         }
@@ -58,7 +58,7 @@ impl Space for IntegerSpace {
     fn default(&self) -> Option<Value> {
         match self {
             IntegerSpace::Sequence(_, _, default) => default.map(Value::Integer),
-            IntegerSpace::Candidates(_) => None,
+            IntegerSpace::Candidates(_, default) => default.map(Value::Index),
         }
     }
 
@@ -71,7 +71,7 @@ impl Space for IntegerSpace {
                     None
                 }
             }
-            (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
+            (IntegerSpace::Candidates(candidates, _), Value::Index(i)) => {
                 if *i + 1 < candidates.len() {
                     Some(Value::Index(i + 1))
                 } else {
@@ -86,7 +86,7 @@ impl Space for IntegerSpace {
     fn len(&self) -> usize {
         match self {
             IntegerSpace::Sequence(start, end, _) => (*end - *start + 1) as usize,
-            IntegerSpace::Candidates(candidates) => candidates.len(),
+            IntegerSpace::Candidates(candidates, _) => candidates.len(),
         }
     }
 }
@@ -252,14 +252,14 @@ impl Profile {
                 (
                     Specification::Integer {
                         transformer: Some(_),
-                        space: IntegerSpace::Candidates(_),
+                        space: IntegerSpace::Candidates(_, _),
                     },
                     Value::Index(_),
                 ) => unimplemented!(),
                 (
                     Specification::Integer {
                         transformer: None,
-                        space: IntegerSpace::Candidates(candidates),
+                        space: IntegerSpace::Candidates(candidates, _),
                     },
                     Value::Index(i),
                 ) => {
@@ -305,14 +305,14 @@ impl Profile {
                     (
                         Specification::Integer {
                             transformer: Some(_),
-                            space: IntegerSpace::Candidates(_),
+                            space: IntegerSpace::Candidates(_, _),
                         },
                         Value::Index(_),
                     ) => unimplemented!(),
                     (
                         Specification::Integer {
                             transformer: None,
-                            space: IntegerSpace::Candidates(candidates),
+                            space: IntegerSpace::Candidates(candidates, _),
                         },
                         Value::Index(i),
                     ) => candidates[*i].to_string(),

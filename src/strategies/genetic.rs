@@ -127,7 +127,7 @@ impl GeneticSpace for IntegerSpace {
             (IntegerSpace::Sequence(_, _, _), Value::Integer(a), Value::Integer(b)) => {
                 Value::Integer((*a + *b) / 2)
             }
-            (IntegerSpace::Candidates(_), Value::Index(a), Value::Index(b)) => {
+            (IntegerSpace::Candidates(_, _), Value::Index(a), Value::Index(b)) => {
                 if *a == *b {
                     Value::Index(*a)
                 } else {
@@ -160,7 +160,7 @@ impl GeneticSpace for IntegerSpace {
                     *n = *end;
                 }
             }
-            (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
+            (IntegerSpace::Candidates(candidates, _), Value::Index(i)) => {
                 // 20% chance
                 if rand::random_bool(0.2) {
                     *i = rand::random_range(0..candidates.len());
