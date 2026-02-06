@@ -1,6 +1,6 @@
 use crate::{
     context::{self, Context},
-    parameter::Value,
+    parameter::{IntegerSpace, Specification, Value},
     utils::interner::Intern,
     workspace::Workspace,
 };
@@ -94,15 +94,36 @@ extern "C" fn parameter_get_int(ctx: *mut Context, name: *const ffi::c_char) -> 
     } else {
         return ptr::null();
     };
-    if let Some(Value::Integer(x)) = ctx.instance.parameters.get(
-        &unsafe { ffi::CStr::from_ptr(name) }
-            .to_string_lossy()
-            .into_owned()
-            .intern(),
-    ) {
-        x as *const i32
+    let name = unsafe { ffi::CStr::from_ptr(name) }
+        .to_string_lossy()
+        .into_owned()
+        .intern();
+    let specification: &Specification = if let Some(specification) = ctx.profile.0.get(&name) {
+        specification
     } else {
-        ptr::null()
+        return ptr::null();
+    };
+    let value = if let Some(value) = ctx.instance.parameters.get(&name) {
+        value
+    } else {
+        return ptr::null();
+    };
+    match (specification, value) {
+        (
+            Specification::Integer {
+                transformer: _,
+                space: IntegerSpace::Sequence(_, _, _),
+            },
+            Value::Integer(v),
+        ) => v as *const ffi::c_int,
+        (
+            Specification::Integer {
+                transformer: _,
+                space: IntegerSpace::Candidates(candidates, _),
+            },
+            Value::Index(i),
+        ) => candidates[*i] as *const ffi::c_int,
+        _ => ptr::null(),
     }
 }
 

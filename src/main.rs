@@ -421,7 +421,11 @@ impl<'a> Autotuner<'a> {
     fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<f64> {
         let temp_dir = self.temp_dir.path();
 
-        let mut context = Context::new(instance, temp_dir.as_os_str().as_encoded_bytes());
+        let mut context = Context::new(
+            &self.metadata.profile,
+            instance,
+            temp_dir.as_os_str().as_encoded_bytes(),
+        );
         for name in &self.metadata.hooks.pre {
             unsafe {
                 let task = self.hook.get::<Hook>(name.as_bytes())?;
