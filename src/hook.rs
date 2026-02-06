@@ -122,7 +122,7 @@ extern "C" fn parameter_get_int(ctx: *mut Context, name: *const ffi::c_char) -> 
                 space: IntegerSpace::Candidates(candidates, _),
             },
             Value::Index(i),
-        ) => candidates[*i] as *const ffi::c_int,
+        ) => &candidates[*i] as *const ffi::c_int,
         _ => ptr::null(),
     }
 }
