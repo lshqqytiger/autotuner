@@ -1,7 +1,13 @@
 use crate::utils::interner::Intern;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, convert::Infallible, hash::Hash, str::FromStr, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    convert::Infallible,
+    hash::{self, Hash},
+    str::FromStr,
+    sync::Arc,
+};
 
 pub(crate) trait Space {
     fn first(&self) -> Value;
@@ -345,6 +351,12 @@ pub(crate) struct Instance {
     pub(crate) parameters: BTreeMap<Arc<str>, Value>,
 }
 
+impl Hash for Instance {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
 impl Serialize for Instance {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -382,19 +394,5 @@ impl Instance {
                 .intern(),
             parameters,
         }
-    }
-}
-
-impl PartialEq for Instance {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for Instance {}
-
-impl Hash for Instance {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
     }
 }

@@ -24,7 +24,7 @@ use crate::{
     ranking::Ranking,
     runner::Runner,
     strategies::exhaustive::Exhaustive,
-    utils::{manually_move::ManuallyMove, signal, union::Union},
+    utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
 use argh::FromArgs;
@@ -213,27 +213,21 @@ impl<'a> Autotuner<'a> {
 
                 let mut count = 1;
                 for instance in &mut state {
-                    unsafe {
-                        signal::block(SIGQUIT);
-                    }
+                    guard!(SIGQUIT, {
+                        println!("{}/{}: ", count, self.metadata.profile.len());
 
-                    println!("{}/{}: ", count, self.metadata.profile.len());
+                        let result = match self.evaluate(&instance, repetition) {
+                            Ok(x) => x,
+                            Err(e) => panic!("{}", e),
+                        };
 
-                    let result = match self.evaluate(&instance, repetition) {
-                        Ok(x) => x,
-                        Err(e) => panic!("{}", e),
-                    };
-
-                    println!("{}", result);
-                    if verbose {
-                        println!("{}", self.metadata.profile.display(&instance));
-                    }
-                    println!();
-                    ranking.push(Arc::new(instance), result);
-
-                    unsafe {
-                        signal::unblock(SIGQUIT);
-                    }
+                        println!("{}", result);
+                        if verbose {
+                            println!("{}", self.metadata.profile.display(&instance));
+                        }
+                        println!();
+                        ranking.push(Arc::new(instance), result);
+                    });
 
                     if *is_canceled {
                         break;
@@ -352,33 +346,30 @@ impl<'a> Autotuner<'a> {
 
                     let len = fresh_instances.len();
                     for i in 0..len {
-                        unsafe {
-                            signal::block(SIGQUIT);
-                        }
+                        guard!(SIGQUIT, {
+                            print!(
+                                "{}/{} {}/{}: ",
+                                state.generation + 1,
+                                options.limit,
+                                i + 1,
+                                len
+                            );
 
-                        print!(
-                            "{}/{} {}/{}: ",
-                            state.generation + 1,
-                            options.limit,
-                            i + 1,
-                            len
-                        );
-
-                        let result = match self.evaluate(&fresh_instances[i].1, repetition) {
-                            Ok(x) => x,
-                            Err(e) => panic!("{}", e),
-                        };
-                        println!("{}", result);
-                        if verbose {
-                            println!("{}", self.metadata.profile.display(&fresh_instances[i].1));
-                        }
-                        println!();
-                        ranking.push(state.instances[i].clone(), result);
-                        evaluation_results.push((result, i));
-
-                        unsafe {
-                            signal::unblock(SIGQUIT);
-                        }
+                            let result = match self.evaluate(&fresh_instances[i].1, repetition) {
+                                Ok(x) => x,
+                                Err(e) => panic!("{}", e),
+                            };
+                            println!("{}", result);
+                            if verbose {
+                                println!(
+                                    "{}",
+                                    self.metadata.profile.display(&fresh_instances[i].1)
+                                );
+                            }
+                            println!();
+                            ranking.push(state.instances[i].clone(), result);
+                            evaluation_results.push((result, i));
+                        });
 
                         if *is_canceled {
                             break;

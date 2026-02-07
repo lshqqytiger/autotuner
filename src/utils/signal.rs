@@ -19,3 +19,16 @@ pub(crate) unsafe fn unblock(signal: i32) {
         libc::sigprocmask(libc::SIG_UNBLOCK, &sigset, ptr::null_mut());
     }
 }
+
+#[macro_export]
+macro_rules! guard {
+    ($signal:ident, $block:block) => {
+        unsafe {
+            $crate::utils::signal::block($signal);
+        }
+        $block
+        unsafe {
+            $crate::utils::signal::unblock($signal);
+        }
+    };
+}
