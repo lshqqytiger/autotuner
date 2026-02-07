@@ -2,7 +2,6 @@ use crate::{
     criterion::Criterion,
     parameter::{Instance, Profile},
 };
-use anyhow::anyhow;
 
 pub(crate) enum Result {
     Valid(f64),
@@ -11,11 +10,11 @@ pub(crate) enum Result {
 }
 
 impl Result {
-    pub(crate) fn anyhow(&self, criterion: &Criterion) -> anyhow::Result<f64> {
+    pub(crate) fn unwrap(&self, criterion: &Criterion) -> f64 {
         match self {
-            Result::Valid(x) => Ok(*x),
-            Result::Invalid => Ok(criterion.invalid()),
-            Result::Unknown => Err(anyhow!("No result returned")),
+            Result::Valid(x) => *x,
+            Result::Invalid => criterion.invalid(),
+            Result::Unknown => panic!("No result returned"),
         }
     }
 }

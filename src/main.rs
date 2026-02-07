@@ -216,11 +216,7 @@ impl<'a> Autotuner<'a> {
                     guard!(SIGQUIT, {
                         println!("{}/{}: ", count, self.metadata.profile.len());
 
-                        let result = match self.evaluate(&instance, repetition) {
-                            Ok(x) => x,
-                            Err(e) => panic!("{}", e),
-                        };
-
+                        let result = self.evaluate(&instance, repetition);
                         println!("{}", result);
                         if verbose {
                             println!("{}", self.metadata.profile.display(&instance));
@@ -355,10 +351,7 @@ impl<'a> Autotuner<'a> {
                                 len
                             );
 
-                            let result = match self.evaluate(&fresh_instances[i].1, repetition) {
-                                Ok(x) => x,
-                                Err(e) => panic!("{}", e),
-                            };
+                            let result = self.evaluate(&fresh_instances[i].1, repetition);
                             println!("{}", result);
                             if verbose {
                                 println!(
@@ -409,7 +402,7 @@ impl<'a> Autotuner<'a> {
         output
     }
 
-    fn evaluate(&self, instance: &Instance, repetition: usize) -> anyhow::Result<f64> {
+    fn evaluate(&self, instance: &Instance, repetition: usize) -> f64 {
         let temp_dir = self.temp_dir.path();
 
         let mut context = Context::new(
@@ -419,12 +412,12 @@ impl<'a> Autotuner<'a> {
         );
         for name in &self.metadata.hooks.pre {
             unsafe {
-                let task = self.hook.get::<Hook>(name.as_bytes())?;
+                let task = self.hook.get::<Hook>(name.as_bytes()).unwrap();
                 task.call(&mut context, &self.workspace);
             }
         }
         if let context::Result::Invalid = context.result {
-            return Ok(self.metadata.criterion.invalid());
+            return self.metadata.criterion.invalid();
         }
 
         let path = temp_dir
@@ -440,10 +433,11 @@ impl<'a> Autotuner<'a> {
                     .chain(self.metadata.compiler_arguments.iter())
                     .chain(context.arguments.iter())
                     .chain(self.metadata.profile.compiler_arguments(&instance).iter()),
-            )?;
+            )
+            .unwrap();
         }
-        let lib = unsafe { Library::new(&path) }?;
-        let runner = unsafe { lib.get::<Runner>(self.metadata.runner.as_bytes())? };
+        let lib = unsafe { Library::new(&path) }.unwrap();
+        let runner = unsafe { lib.get::<Runner>(self.metadata.runner.as_bytes()) }.unwrap();
 
         let mut fitnesses = Vec::with_capacity(repetition);
         for _ in 0..repetition {
@@ -458,9 +452,9 @@ impl<'a> Autotuner<'a> {
                     unregister(id);
                 }
             };
-            let fitness = context.result.anyhow(&self.metadata.criterion)?;
+            let fitness = context.result.unwrap(&self.metadata.criterion);
             if fitness.is_nan() {
-                return Err(anyhow!("NaN value encountered"));
+                panic!("NaN value encountered");
             }
             fitnesses.push(fitness);
         }
@@ -471,12 +465,12 @@ impl<'a> Autotuner<'a> {
 
         for name in &self.metadata.hooks.post {
             unsafe {
-                let task = self.hook.get::<Hook>(name.as_bytes())?;
+                let task = self.hook.get::<Hook>(name.as_bytes()).unwrap();
                 task.call(&mut context, &self.workspace);
             }
         }
 
-        context.result.anyhow(&self.metadata.criterion)
+        context.result.unwrap(&self.metadata.criterion)
     }
 }
 
