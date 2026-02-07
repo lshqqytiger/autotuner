@@ -222,6 +222,7 @@ impl<'a> Autotuner<'a> {
                             println!("{}", self.metadata.profile.display(&instance));
                         }
                         println!();
+
                         ranking.push(Arc::new(instance), result);
                     });
 
@@ -248,118 +249,29 @@ impl<'a> Autotuner<'a> {
                 let mut state = if let Some(SavedState::Genetic(state)) = state {
                     state
                 } else {
-                    strategies::genetic::State::default()
+                    let mut state = strategies::genetic::State::default();
+                    state.initialize(&self.metadata.profile, options.initial);
+                    state
                 };
                 let mut history = Vec::new();
 
-                let mut evaluation_results: Vec<(f64, usize)> = Vec::with_capacity(options.initial);
                 let mut rng = rand::rng();
-                while state.generation < options.limit {
-                    if evaluation_results.is_empty() {
-                        state.initialize(&self.metadata.profile, options.initial);
-                    } else {
-                        let iter = evaluation_results
-                            .iter()
-                            .map(|(x, _)| *x)
-                            .filter(|x| x.is_finite());
-                        let minmax = self.metadata.direction.minmax(iter);
-                        let summary = strategies::genetic::GenerationSummary::new(
-                            ranking
-                                .best()
-                                .cloned()
-                                .map(|x| x.into_log(&self.metadata.profile)),
-                            minmax,
-                        );
-                        println!("=== Generation #{} Summary ===", state.generation);
-                        println!("{}", summary);
-                        history.push(summary);
-
-                        let (best, worst) = minmax;
-                        if best.is_infinite() {
-                            evaluation_results.clear();
-                            continue;
-                        }
-
-                        let mut inversed = evaluation_results.clone();
-                        for pair in &mut inversed {
-                            if pair.0.is_infinite() {
-                                pair.0 = worst;
-                                continue;
-                            }
-
-                            pair.0 = match self.metadata.direction {
-                                Direction::Minimize => pair.0,
-                                Direction::Maximize => worst - pair.0,
-                            };
-                        }
-                        inversed.shuffle(&mut rng);
-                        let holes = strategies::genetic::stochastic_universal_sampling(
-                            &inversed,
-                            options.ngeneration,
-                        );
-                        drop(inversed);
-
-                        for result in &mut evaluation_results {
-                            if result.0.is_infinite() {
-                                result.0 = best;
-                                continue;
-                            }
-
-                            result.0 = match self.metadata.direction {
-                                Direction::Minimize => worst - result.0,
-                                Direction::Maximize => result.0,
-                            };
-                        }
-                        evaluation_results.shuffle(&mut rng);
-
-                        let mut children = Vec::with_capacity(options.ngeneration);
-                        for _ in 0..options.ngeneration {
-                            let result = strategies::genetic::stochastic_universal_sampling(
-                                &evaluation_results,
-                                2,
-                            );
-                            let mut child = strategies::genetic::crossover(
-                                &self.metadata.profile,
-                                &state.instances[result[0]],
-                                &state.instances[result[1]],
-                            );
-                            strategies::genetic::mutate(&self.metadata.profile, &mut child);
-                            children.push(child);
-                        }
-
-                        for (index, instance) in children.into_iter().enumerate() {
-                            state.instances[holes[index]] = Arc::new(instance);
-                        }
-
-                        evaluation_results.clear();
-                    }
+                while state.generation <= options.limit {
+                    let mut evaluation_results: Vec<(f64, usize)> =
+                        Vec::with_capacity(options.initial);
 
                     let len = state.instances.len();
-                    let mut fresh_instances = Vec::new();
-                    for index in 0..len {
-                        fresh_instances.push((index, state.instances[index].clone()));
-                    }
-
-                    let len = fresh_instances.len();
                     for i in 0..len {
                         guard!(SIGQUIT, {
-                            print!(
-                                "{}/{} {}/{}: ",
-                                state.generation + 1,
-                                options.limit,
-                                i + 1,
-                                len
-                            );
+                            print!("{}/{} {}/{}: ", state.generation, options.limit, i + 1, len);
 
-                            let result = self.evaluate(&fresh_instances[i].1, repetition);
+                            let result = self.evaluate(&state.instances[i], repetition);
                             println!("{}", result);
                             if verbose {
-                                println!(
-                                    "{}",
-                                    self.metadata.profile.display(&fresh_instances[i].1)
-                                );
+                                println!("{}", self.metadata.profile.display(&state.instances[i]));
                             }
                             println!();
+
                             ranking.push(state.instances[i].clone(), result);
                             evaluation_results.push((result, i));
                         });
@@ -371,6 +283,79 @@ impl<'a> Autotuner<'a> {
 
                     if *is_canceled {
                         break;
+                    }
+
+                    let iter = evaluation_results
+                        .iter()
+                        .map(|(x, _)| *x)
+                        .filter(|x| x.is_finite());
+                    let minmax = self.metadata.direction.minmax(iter);
+                    let summary = strategies::genetic::GenerationSummary::new(
+                        ranking
+                            .best()
+                            .cloned()
+                            .map(|x| x.into_log(&self.metadata.profile)),
+                        minmax,
+                    );
+                    println!("=== Generation #{} Summary ===", state.generation);
+                    println!("{}", summary);
+                    history.push(summary);
+
+                    let (best, worst) = minmax;
+                    if best.is_infinite() {
+                        state.initialize(&self.metadata.profile, options.initial);
+                        continue;
+                    }
+
+                    let mut inversed = evaluation_results.clone();
+                    for pair in &mut inversed {
+                        if pair.0.is_infinite() {
+                            pair.0 = worst;
+                            continue;
+                        }
+
+                        pair.0 = match self.metadata.direction {
+                            Direction::Minimize => pair.0,
+                            Direction::Maximize => worst - pair.0,
+                        };
+                    }
+                    inversed.shuffle(&mut rng);
+                    let holes = strategies::genetic::stochastic_universal_sampling(
+                        &inversed,
+                        options.ngeneration,
+                    );
+                    drop(inversed);
+
+                    for result in &mut evaluation_results {
+                        if result.0.is_infinite() {
+                            result.0 = best;
+                            continue;
+                        }
+
+                        result.0 = match self.metadata.direction {
+                            Direction::Minimize => worst - result.0,
+                            Direction::Maximize => result.0,
+                        };
+                    }
+                    evaluation_results.shuffle(&mut rng);
+
+                    let mut children = Vec::with_capacity(options.ngeneration);
+                    for _ in 0..options.ngeneration {
+                        let result = strategies::genetic::stochastic_universal_sampling(
+                            &evaluation_results,
+                            2,
+                        );
+                        let mut child = strategies::genetic::crossover(
+                            &self.metadata.profile,
+                            &state.instances[result[0]],
+                            &state.instances[result[1]],
+                        );
+                        strategies::genetic::mutate(&self.metadata.profile, &mut child);
+                        children.push(child);
+                    }
+
+                    for (index, instance) in children.into_iter().enumerate() {
+                        state.instances[holes[index]] = Arc::new(instance);
                     }
 
                     state.generation += 1;

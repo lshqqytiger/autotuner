@@ -37,7 +37,7 @@ pub(crate) struct State {
 impl Default for State {
     fn default() -> Self {
         State {
-            generation: 0,
+            generation: 1,
             instances: Vec::new(),
         }
     }
