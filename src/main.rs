@@ -28,6 +28,7 @@ use crate::{
 };
 use anyhow::anyhow;
 use argh::FromArgs;
+use fxhash::FxHashMap;
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::Library;
 use rand::seq::SliceRandom;
@@ -256,21 +257,36 @@ impl<'a> Autotuner<'a> {
                 let mut history = Vec::new();
 
                 let mut rng = rand::rng();
-                while state.generation <= options.limit {
-                    let mut evaluation_results: Vec<(f64, usize)> =
-                        Vec::with_capacity(options.initial);
+                let mut temp_results = FxHashMap::default();
+                loop {
+                    let mut evaluation_results = Vec::with_capacity(state.instances.len());
 
+                    // evaluate instances
                     let len = state.instances.len();
                     for i in 0..len {
                         guard!(SIGQUIT, {
-                            print!("{}/{} {}/{}: ", state.generation, options.limit, i + 1, len);
+                            let result = if let Some(&result) = temp_results.get(&i) {
+                                result
+                            } else {
+                                print!(
+                                    "{}/{} {}/{}: ",
+                                    state.generation,
+                                    options.limit,
+                                    i + 1,
+                                    len
+                                );
 
-                            let result = self.evaluate(&state.instances[i], repetition);
-                            println!("{}", result);
-                            if verbose {
-                                println!("{}", self.metadata.profile.display(&state.instances[i]));
-                            }
-                            println!();
+                                let result = self.evaluate(&state.instances[i], repetition);
+                                println!("{}", result);
+                                if verbose {
+                                    println!(
+                                        "{}",
+                                        self.metadata.profile.display(&state.instances[i])
+                                    );
+                                }
+                                println!();
+                                result
+                            };
 
                             ranking.push(state.instances[i].clone(), result);
                             evaluation_results.push((result, i));
@@ -285,6 +301,7 @@ impl<'a> Autotuner<'a> {
                         break;
                     }
 
+                    // record generation summary
                     let iter = evaluation_results
                         .iter()
                         .map(|(x, _)| *x)
@@ -300,6 +317,11 @@ impl<'a> Autotuner<'a> {
                     println!("=== Generation #{} Summary ===", state.generation);
                     println!("{}", summary);
                     history.push(summary);
+
+                    state.generation += 1;
+                    if state.generation > options.limit {
+                        break;
+                    }
 
                     let (best, worst) = minmax;
                     if best.is_infinite() {
@@ -339,8 +361,11 @@ impl<'a> Autotuner<'a> {
                     }
                     evaluation_results.shuffle(&mut rng);
 
+                    // generate & evaluate children
                     let mut children = Vec::with_capacity(options.ngeneration);
-                    for _ in 0..options.ngeneration {
+                    temp_results.clear();
+                    let mut index = 0;
+                    while index < options.ngeneration {
                         let result = strategies::genetic::stochastic_universal_sampling(
                             &evaluation_results,
                             2,
@@ -351,14 +376,39 @@ impl<'a> Autotuner<'a> {
                             &state.instances[result[1]],
                         );
                         strategies::genetic::mutate(&self.metadata.profile, &mut child);
+
+                        guard!(SIGQUIT, {
+                            print!(
+                                "{}/{} {}/{}: ",
+                                state.generation,
+                                options.limit,
+                                index + 1,
+                                options.ngeneration
+                            );
+
+                            let result = self.evaluate(&child, repetition);
+                            println!("{}", result);
+                            if verbose {
+                                println!("{}", self.metadata.profile.display(&child));
+                            }
+                            println!();
+
+                            // retry
+                            if result.is_infinite() {
+                                continue;
+                            }
+
+                            temp_results.insert(holes[index], result);
+                        });
+
                         children.push(child);
+                        index += 1;
                     }
 
+                    // replace instances with children
                     for (index, instance) in children.into_iter().enumerate() {
                         state.instances[holes[index]] = Arc::new(instance);
                     }
-
-                    state.generation += 1;
                 }
 
                 if *is_canceled {
