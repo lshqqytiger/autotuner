@@ -23,7 +23,7 @@ use crate::{
     parameter::Instance,
     ranking::Ranking,
     runner::Runner,
-    strategies::exhaustive::Exhaustive,
+    strategies::{Checkpoint, exhaustive::Exhaustive},
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
@@ -32,7 +32,7 @@ use fxhash::FxHashMap;
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::Library;
 use rand::seq::SliceRandom;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use signal_hook_registry::{register, register_unchecked, unregister};
 use std::{fs, io, process, sync::Arc, time::SystemTime};
 use tempdir::TempDir;
@@ -44,15 +44,15 @@ struct Options {
     sources: Vec<String>,
 
     #[argh(option, default = "Vec::new()")]
-    /// source codes
+    /// path to helper files
     helper: Vec<String>,
 
     #[argh(option, default = "Vec::new()")]
-    /// source codes
+    /// path to hook files
     hook: Vec<String>,
 
     #[argh(option, short = 'm')]
-    /// metadata file (required)
+    /// path to metadata file (required)
     metadata: String,
 
     #[argh(subcommand)]
@@ -68,7 +68,7 @@ struct Options {
     candidates: usize,
 
     #[argh(option, arg_name = "continue")]
-    /// continue from the saved state file
+    /// path to checkpoint file
     continue_: Option<String>,
 
     #[argh(option, default = "\"results.json\".to_string()")]
@@ -97,24 +97,6 @@ impl<'a> Output<'a> {
 
     fn save(self) -> io::Result<()> {
         fs::write(self.0, self.1)
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-enum SavedState {
-    Exhaustive(strategies::exhaustive::State),
-    Genetic(strategies::genetic::State),
-}
-
-impl From<strategies::exhaustive::State> for SavedState {
-    fn from(state: strategies::exhaustive::State) -> Self {
-        SavedState::Exhaustive(state)
-    }
-}
-
-impl From<strategies::genetic::State> for SavedState {
-    fn from(state: strategies::genetic::State) -> Self {
-        SavedState::Genetic(state)
     }
 }
 
@@ -190,10 +172,10 @@ impl<'a> Autotuner<'a> {
         strategy: &'a Strategy,
         repetition: usize,
         candidates: usize,
-        state: Option<SavedState>,
+        checkpoint: Option<Checkpoint>,
         verbose: bool,
         path: &'a String,
-    ) -> Union<Vec<Output<'a>>, SavedState> {
+    ) -> Union<Vec<Output<'a>>, Checkpoint> {
         let is_canceled = ManuallyMove::new(false);
         let sigquit_handler = unsafe {
             let is_canceled = is_canceled.clone();
@@ -206,7 +188,7 @@ impl<'a> Autotuner<'a> {
         let output = match strategy {
             Strategy::Exhaustive(_) => {
                 let mut ranking = Ranking::new(&self.metadata.direction, candidates);
-                let mut state = if let Some(SavedState::Exhaustive(state)) = state {
+                let mut state = if let Some(Checkpoint::Exhaustive(state)) = checkpoint {
                     state
                 } else {
                     self.metadata.profile.iter()
@@ -247,7 +229,7 @@ impl<'a> Autotuner<'a> {
             }
             Strategy::Genetic(options) => {
                 let mut ranking = Ranking::new(&self.metadata.direction, candidates);
-                let mut state = if let Some(SavedState::Genetic(state)) = state {
+                let mut state = if let Some(Checkpoint::Genetic(state)) = checkpoint {
                     state
                 } else {
                     let mut state = strategies::genetic::State::default();
@@ -522,7 +504,7 @@ fn main() -> anyhow::Result<()> {
             }
             if args.continue_.is_some() && options.history.is_some() {
                 return Err(anyhow!(
-                    "Cannot specify history output file when continuing from saved state"
+                    "Cannot specify history output file when continuing from checkpoint"
                 ));
             }
         }
@@ -534,8 +516,8 @@ fn main() -> anyhow::Result<()> {
 
     let autotuner = Autotuner::new(&args.sources, &args.helper, &args.hook, metadata)?;
     let state = args.continue_.as_ref().map(|filename| {
-        let content = fs::read_to_string(filename).expect("Failed to read saved state file");
-        serde_json::from_str::<SavedState>(&content).expect("Failed to parse saved state file")
+        let content = fs::read_to_string(filename).expect("Failed to read checkpoint file");
+        serde_json::from_str::<Checkpoint>(&content).expect("Failed to parse checkpoint file")
     });
     match_union!(
         autotuner.run(
@@ -551,9 +533,9 @@ fn main() -> anyhow::Result<()> {
                 output.save().expect("Failed to write output file");
             }
         },
-        saved_state => {
+        checkpoint => {
             let filename = format!(
-                "saved_state.{}",
+                "checkpoint.{}",
                 SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -561,10 +543,10 @@ fn main() -> anyhow::Result<()> {
             );
             fs::write(
                 &filename,
-                serde_json::to_string(&saved_state).expect("Failed to serialize instances"),
+                serde_json::to_string(&checkpoint).expect("Failed to serialize checkpoint"),
             )
-            .expect("Failed to write current state to file");
-            println!("Saved current state to {}", filename);
+            .expect("Failed to write checkpoint to file");
+            println!("Saved checkpoint to {}", filename);
         }
     );
 
