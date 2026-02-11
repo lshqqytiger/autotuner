@@ -232,9 +232,7 @@ impl<'a> Autotuner<'a> {
                 let mut state = if let Some(Checkpoint::Genetic(state)) = checkpoint {
                     state
                 } else {
-                    let mut state = strategies::genetic::State::default();
-                    state.initialize(&self.metadata.profile, options.initial);
-                    state
+                    strategies::genetic::State::new(&self.metadata.profile, options.initial)
                 };
                 let mut history = Vec::new();
 
@@ -245,33 +243,41 @@ impl<'a> Autotuner<'a> {
 
                     // evaluate instances
                     let len = state.instances.len();
-                    for i in 0..len {
+                    let mut index = 0;
+                    while index < len {
                         guard!(SIGQUIT, {
-                            let result = if let Some(&result) = temp_results.get(&i) {
+                            let result = if let Some(&result) = temp_results.get(&index) {
                                 result
                             } else {
                                 print!(
                                     "{}/{} {}/{}: ",
                                     state.generation,
                                     options.limit,
-                                    i + 1,
+                                    index + 1,
                                     len
                                 );
 
-                                let result = self.evaluate(&state.instances[i], repetition);
+                                let result = self.evaluate(&state.instances[index], repetition);
                                 println!("{}", result);
                                 if verbose {
                                     println!(
                                         "{}",
-                                        self.metadata.profile.display(&state.instances[i])
+                                        self.metadata.profile.display(&state.instances[index])
                                     );
                                 }
                                 println!();
+
                                 result
                             };
 
-                            ranking.push(state.instances[i].clone(), result);
-                            evaluation_results.push((result, i));
+                            if state.generation == 1 && result.is_infinite() {
+                                state.regenerate(&self.metadata.profile, index);
+                                continue;
+                            } else {
+                                ranking.push(state.instances[index].clone(), result);
+                                evaluation_results.push((result, index));
+                                index += 1;
+                            }
                         });
 
                         if *is_canceled {
@@ -306,11 +312,6 @@ impl<'a> Autotuner<'a> {
                     }
 
                     let (best, worst) = minmax;
-                    if best.is_infinite() {
-                        state.initialize(&self.metadata.profile, options.initial);
-                        continue;
-                    }
-
                     let mut inverted = evaluation_results.clone();
                     for pair in &mut inverted {
                         if pair.0.is_infinite() {

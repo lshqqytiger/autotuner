@@ -38,27 +38,30 @@ pub(crate) struct State {
     pub(crate) instances: Vec<Arc<Instance>>,
 }
 
-impl Default for State {
-    fn default() -> Self {
+impl State {
+    fn sample(profile: &Profile) -> Arc<Instance> {
+        Arc::new(Instance::new(
+            profile
+                .0
+                .iter()
+                .map(|(name, parameter)| (name.clone(), parameter.get_space().random()))
+                .collect::<BTreeMap<Arc<str>, Value>>(),
+        ))
+    }
+
+    pub(crate) fn new(profile: &Profile, initial: usize) -> Self {
+        let mut instances = Vec::with_capacity(initial);
+        for _ in 0..initial {
+            instances.push(Self::sample(profile));
+        }
         State {
             generation: 1,
-            instances: Vec::new(),
+            instances,
         }
     }
-}
 
-impl State {
-    pub(crate) fn initialize(&mut self, profile: &Profile, initial: usize) {
-        self.instances.clear();
-        for _ in 0..initial {
-            self.instances.push(Arc::new(Instance::new(
-                profile
-                    .0
-                    .iter()
-                    .map(|(name, parameter)| (name.clone(), parameter.get_space().random()))
-                    .collect::<BTreeMap<Arc<str>, Value>>(),
-            )));
-        }
+    pub(crate) fn regenerate(&mut self, profile: &Profile, index: usize) {
+        self.instances[index] = Self::sample(profile);
     }
 }
 
