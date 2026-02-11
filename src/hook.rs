@@ -112,14 +112,14 @@ extern "C" fn parameter_get_int(ctx: *mut Context, name: *const ffi::c_char) -> 
         (
             Specification::Integer {
                 transformer: _,
-                space: IntegerSpace::Sequence(_, _, _),
+                space: IntegerSpace::Sequence(_, _),
             },
             Value::Integer(v),
         ) => v as *const ffi::c_int,
         (
             Specification::Integer {
                 transformer: _,
-                space: IntegerSpace::Candidates(candidates, _),
+                space: IntegerSpace::Candidates(candidates),
             },
             Value::Index(i),
         ) => &candidates[*i] as *const ffi::c_int,

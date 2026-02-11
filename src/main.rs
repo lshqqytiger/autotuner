@@ -15,7 +15,7 @@ mod workspace;
 
 use crate::{
     context::Context,
-    direction::Direction,
+    direction::{Direction, Sort, SortAndReverse},
     execution_result::IntoLogs,
     helper::Helper,
     hook::Hook,
@@ -311,8 +311,8 @@ impl<'a> Autotuner<'a> {
                         continue;
                     }
 
-                    let mut inversed = evaluation_results.clone();
-                    for pair in &mut inversed {
+                    let mut inverted = evaluation_results.clone();
+                    for pair in &mut inverted {
                         if pair.0.is_infinite() {
                             pair.0 = worst;
                             continue;
@@ -323,12 +323,14 @@ impl<'a> Autotuner<'a> {
                             Direction::Maximize => worst - pair.0,
                         };
                     }
-                    inversed.shuffle(&mut rng);
+                    self.metadata.direction.sort_and_reverse(&mut inverted);
+                    inverted.truncate(inverted.len() - options.remain);
+                    inverted.shuffle(&mut rng);
                     let holes = strategies::genetic::stochastic_universal_sampling(
-                        &inversed,
-                        options.ngeneration,
+                        &inverted,
+                        options.generate,
                     );
-                    drop(inversed);
+                    drop(inverted);
 
                     for result in &mut evaluation_results {
                         if result.0.is_infinite() {
@@ -344,10 +346,10 @@ impl<'a> Autotuner<'a> {
                     evaluation_results.shuffle(&mut rng);
 
                     // generate & evaluate children
-                    let mut children = Vec::with_capacity(options.ngeneration);
+                    let mut children = Vec::with_capacity(options.generate);
                     temp_results.clear();
                     let mut index = 0;
-                    while index < options.ngeneration {
+                    while index < options.generate {
                         let result = strategies::genetic::stochastic_universal_sampling(
                             &evaluation_results,
                             2,
@@ -365,7 +367,7 @@ impl<'a> Autotuner<'a> {
                                 state.generation,
                                 options.limit,
                                 index + 1,
-                                options.ngeneration
+                                options.generate
                             );
 
                             let result = self.evaluate(&child, repetition);
@@ -499,7 +501,7 @@ fn main() -> anyhow::Result<()> {
             if options.initial <= 1 {
                 return Err(anyhow!("Initial population size must be greater than 1"));
             }
-            if options.ngeneration == 0 {
+            if options.generate == 0 {
                 return Err(anyhow!("Number of each generation must be greater than 0"));
             }
             if args.continue_.is_some() && options.history.is_some() {

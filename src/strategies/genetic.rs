@@ -11,16 +11,20 @@ use std::{collections::BTreeMap, fmt, sync::Arc};
 /// genetic search options
 #[argh(subcommand, name = "genetic")]
 pub(crate) struct GeneticSearchOptions {
-    #[argh(option, short = 'i', default = "256")]
-    /// initial population size (default: 256)
+    #[argh(option, short = 'i', default = "128")]
+    /// initial population size (default: 128)
     pub(crate) initial: usize,
 
-    #[argh(option, short = 'n', default = "32")]
-    /// number of instances that will be made at each generation (default: 32)
-    pub(crate) ngeneration: usize,
+    #[argh(option, short = 'r', default = "4")]
+    /// number of instances that will remain at each generation (default: 4)
+    pub(crate) remain: usize,
 
-    #[argh(option, short = 'l', default = "256")]
-    /// maximum number of generations (default: 256)
+    #[argh(option, short = 'g', default = "96")]
+    /// number of instances that will be made at each generation (default: 96)
+    pub(crate) generate: usize,
+
+    #[argh(option, short = 'l', default = "128")]
+    /// maximum number of generations (default: 128)
     pub(crate) limit: usize,
 
     #[argh(option)]
@@ -51,9 +55,7 @@ impl State {
                 profile
                     .0
                     .iter()
-                    .map(|(name, parameter)| {
-                        (name.clone(), parameter.get_space().default_or_random())
-                    })
+                    .map(|(name, parameter)| (name.clone(), parameter.get_space().random()))
                     .collect::<BTreeMap<Arc<str>, Value>>(),
             )));
         }
@@ -124,10 +126,10 @@ trait GeneticSpace {
 impl GeneticSpace for IntegerSpace {
     fn crossover(&self, a: &Value, b: &Value) -> Value {
         match (self, a, b) {
-            (IntegerSpace::Sequence(_, _, _), Value::Integer(a), Value::Integer(b)) => {
+            (IntegerSpace::Sequence(_, _), Value::Integer(a), Value::Integer(b)) => {
                 Value::Integer((*a + *b) / 2)
             }
-            (IntegerSpace::Candidates(_, _), Value::Index(a), Value::Index(b)) => {
+            (IntegerSpace::Candidates(_), Value::Index(a), Value::Index(b)) => {
                 if *a == *b {
                     Value::Index(*a)
                 } else {
@@ -140,15 +142,15 @@ impl GeneticSpace for IntegerSpace {
 
     fn mutate(&self, code: &mut Value) {
         match (self, code) {
-            (IntegerSpace::Sequence(start, end, _), Value::Integer(n)) => {
+            (IntegerSpace::Sequence(start, end), Value::Integer(n)) => {
                 // 10% chance to completely randomize the value
                 if rand::random_bool(0.1) {
                     *n = rand::random_range(*start..=*end);
                     return;
                 }
 
-                // variation in -20% ~ +20%
-                let mut variation = ((end - start) as f64 * 0.2) as i32;
+                // variation in -10% ~ +10%
+                let mut variation = ((end - start) as f64 * 0.1) as i32;
                 if variation == 0 {
                     variation = 1;
                 }
@@ -160,9 +162,9 @@ impl GeneticSpace for IntegerSpace {
                     *n = *end;
                 }
             }
-            (IntegerSpace::Candidates(candidates, _), Value::Index(i)) => {
-                // 20% chance
-                if rand::random_bool(0.2) {
+            (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
+                // 10% chance
+                if rand::random_bool(0.1) {
                     *i = rand::random_range(0..candidates.len());
                 }
             }
@@ -192,8 +194,8 @@ impl GeneticSpace for SwitchSpace {
             return;
         }
 
-        // 20% chance to flip the switch
-        if rand::random_bool(0.2) {
+        // 10% chance to flip the switch
+        if rand::random_bool(0.1) {
             if let Value::Switch(b) = code {
                 *b = !*b;
             }
@@ -216,8 +218,8 @@ impl GeneticSpace for KeywordSpace {
     }
 
     fn mutate(&self, code: &mut Value) {
-        // 20% chance to change the keyword
-        if rand::random_bool(0.2) {
+        // 10% chance to change the keyword
+        if rand::random_bool(0.1) {
             *code = self.random();
         }
     }

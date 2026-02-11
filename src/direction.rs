@@ -1,6 +1,14 @@
 use crate::execution_result::ExecutionResult;
 use serde::{Deserialize, Serialize};
 
+pub(crate) trait Sort<T> {
+    fn sort(&self, results: &mut Vec<T>);
+}
+
+pub(crate) trait SortAndReverse<T> {
+    fn sort_and_reverse(&self, results: &mut Vec<T>);
+}
+
 pub(crate) enum Direction {
     Minimize,
     Maximize,
@@ -46,11 +54,22 @@ impl Direction {
             Direction::Maximize => (max, min),
         }
     }
+}
 
-    pub(crate) fn sort(&self, results: &mut Vec<ExecutionResult>) {
+impl Sort<ExecutionResult> for Direction {
+    fn sort(&self, results: &mut Vec<ExecutionResult>) {
         match self {
             Direction::Minimize => results.sort_by(|a, b| a.1.total_cmp(&b.1)),
             Direction::Maximize => results.sort_by(|a, b| b.1.total_cmp(&a.1)),
+        }
+    }
+}
+
+impl SortAndReverse<(f64, usize)> for Direction {
+    fn sort_and_reverse(&self, results: &mut Vec<(f64, usize)>) {
+        match self {
+            Direction::Minimize => results.sort_by(|a, b| b.0.total_cmp(&a.0)),
+            Direction::Maximize => results.sort_by(|a, b| a.0.total_cmp(&b.0)),
         }
     }
 }
