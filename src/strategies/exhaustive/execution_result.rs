@@ -1,10 +1,11 @@
-use crate::parameter::{Instance, Profile};
-use serde::Serialize;
+use crate::{
+    direction::{Direction, Sort},
+    execution_log::{ExecutionLog, IntoLogs},
+    parameter::{Instance, Profile},
+};
 use std::cmp;
-use std::sync::Arc;
 
-#[derive(Clone)]
-pub(crate) struct ExecutionResult(pub(crate) Arc<Instance>, pub(crate) f64);
+pub(crate) struct ExecutionResult(pub(crate) Instance, pub(crate) f64);
 
 impl PartialEq for ExecutionResult {
     fn eq(&self, other: &Self) -> bool {
@@ -32,8 +33,13 @@ impl ExecutionResult {
     }
 }
 
-pub(crate) trait IntoLogs {
-    fn into_logs(self, profile: &Profile) -> Vec<ExecutionLog>;
+impl Sort<ExecutionResult> for Direction {
+    fn sort(&self, results: &mut Vec<ExecutionResult>) {
+        match self {
+            Direction::Minimize => results.sort_by(|a, b| a.1.total_cmp(&b.1)),
+            Direction::Maximize => results.sort_by(|a, b| b.1.total_cmp(&a.1)),
+        }
+    }
 }
 
 impl IntoLogs for Vec<ExecutionResult> {
@@ -43,6 +49,3 @@ impl IntoLogs for Vec<ExecutionResult> {
             .collect()
     }
 }
-
-#[derive(Serialize)]
-pub(crate) struct ExecutionLog(pub(crate) String, pub(crate) f64);

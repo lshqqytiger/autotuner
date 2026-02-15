@@ -2,12 +2,12 @@ mod compile;
 mod context;
 mod criterion;
 mod direction;
-mod execution_result;
+mod execution_log;
+mod heap;
 mod helper;
 mod hook;
 mod metadata;
 mod parameter;
-mod ranking;
 mod runner;
 mod strategies;
 mod utils;
@@ -16,14 +16,13 @@ mod workspace;
 use crate::{
     context::Context,
     direction::{Direction, Sort, SortAndReverse},
-    execution_result::IntoLogs,
+    execution_log::IntoLogs,
     helper::Helper,
     hook::Hook,
     metadata::Metadata,
     parameter::Instance,
-    ranking::Ranking,
     runner::Runner,
-    strategies::{Checkpoint, exhaustive::Exhaustive},
+    strategies::{exhaustive::Exhaustive, Checkpoint},
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
@@ -34,7 +33,7 @@ use libloading::Library;
 use rand::seq::SliceRandom;
 use serde::Serialize;
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, io, process, sync::Arc, time::SystemTime};
+use std::{fs, io, process, rc::Rc, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -83,8 +82,8 @@ struct Options {
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand)]
 enum Strategy {
-    Exhaustive(strategies::exhaustive::ExhaustiveSearchOptions),
-    Genetic(strategies::genetic::GeneticSearchOptions),
+    Exhaustive(strategies::exhaustive::options::ExhaustiveSearchOptions),
+    Genetic(strategies::genetic::options::GeneticSearchOptions),
 }
 
 struct Output<'a>(&'a String, String);
@@ -187,7 +186,10 @@ impl<'a> Autotuner<'a> {
 
         let output = match strategy {
             Strategy::Exhaustive(_) => {
-                let mut ranking = Ranking::new(&self.metadata.direction, candidates);
+                let mut ranking = strategies::exhaustive::ranking::Ranking::new(
+                    &self.metadata.direction,
+                    candidates,
+                );
                 let mut state = if let Some(Checkpoint::Exhaustive(state)) = checkpoint {
                     state
                 } else {
@@ -206,7 +208,7 @@ impl<'a> Autotuner<'a> {
                         }
                         println!();
 
-                        ranking.push(Arc::new(instance), result);
+                        ranking.push(instance, result);
                     });
 
                     if *is_canceled {
@@ -228,11 +230,14 @@ impl<'a> Autotuner<'a> {
                 }
             }
             Strategy::Genetic(options) => {
-                let mut ranking = Ranking::new(&self.metadata.direction, candidates);
+                let mut ranking = strategies::genetic::ranking::Ranking::new(
+                    &self.metadata.direction,
+                    candidates,
+                );
                 let mut state = if let Some(Checkpoint::Genetic(state)) = checkpoint {
                     state
                 } else {
-                    strategies::genetic::State::new(&self.metadata.profile, options.initial)
+                    strategies::genetic::state::State::new(&self.metadata.profile, options.initial)
                 };
                 let mut history = Vec::new();
 
@@ -294,13 +299,13 @@ impl<'a> Autotuner<'a> {
                         .iter()
                         .map(|(x, _)| *x)
                         .filter(|x| x.is_finite());
-                    let minmax = self.metadata.direction.minmax(iter);
+                    let boundaries = self.metadata.direction.boundaries(iter);
                     let summary = strategies::genetic::GenerationSummary::new(
                         ranking
                             .best()
                             .cloned()
                             .map(|x| x.into_log(&self.metadata.profile)),
-                        minmax,
+                        boundaries,
                     );
                     println!("=== Generation #{} Summary ===", state.generation);
                     println!("{}", summary);
@@ -311,7 +316,7 @@ impl<'a> Autotuner<'a> {
                         break;
                     }
 
-                    let (best, worst) = minmax;
+                    let (best, worst) = boundaries;
                     let mut inverted = evaluation_results.clone();
                     for pair in &mut inverted {
                         if pair.0.is_infinite() {
@@ -392,7 +397,7 @@ impl<'a> Autotuner<'a> {
 
                     // replace instances with children
                     for (index, instance) in children.into_iter().enumerate() {
-                        state.instances[holes[index]] = Arc::new(instance);
+                        state.instances[holes[index]] = Rc::new(instance);
                     }
                 }
 

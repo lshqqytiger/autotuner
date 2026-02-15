@@ -1,5 +1,5 @@
-use crate::execution_result::ExecutionResult;
 use serde::{Deserialize, Serialize};
+use std::cmp;
 
 pub(crate) trait Sort<T> {
     fn sort(&self, results: &mut Vec<T>);
@@ -45,7 +45,14 @@ impl<'de> Deserialize<'de> for Direction {
 }
 
 impl Direction {
-    pub(crate) fn minmax(&self, iter: impl Iterator<Item = f64>) -> (f64, f64) {
+    pub(crate) fn compare(&self, a: f64, b: f64) -> cmp::Ordering {
+        match self {
+            Direction::Minimize => b.total_cmp(&a),
+            Direction::Maximize => a.total_cmp(&b),
+        }
+    }
+
+    pub(crate) fn boundaries(&self, iter: impl Iterator<Item = f64>) -> (f64, f64) {
         let (min, max) = iter.fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), v| {
             (min.min(v), max.max(v))
         });
@@ -56,20 +63,30 @@ impl Direction {
     }
 }
 
-impl Sort<ExecutionResult> for Direction {
-    fn sort(&self, results: &mut Vec<ExecutionResult>) {
-        match self {
-            Direction::Minimize => results.sort_by(|a, b| a.1.total_cmp(&b.1)),
-            Direction::Maximize => results.sort_by(|a, b| b.1.total_cmp(&a.1)),
-        }
+impl SortAndReverse<(f64, usize)> for Direction {
+    fn sort_and_reverse(&self, results: &mut Vec<(f64, usize)>) {
+        results.sort_by(|a, b| self.compare(a.0, b.0).reverse());
     }
 }
 
-impl SortAndReverse<(f64, usize)> for Direction {
-    fn sort_and_reverse(&self, results: &mut Vec<(f64, usize)>) {
-        match self {
-            Direction::Minimize => results.sort_by(|a, b| b.0.total_cmp(&a.0)),
-            Direction::Maximize => results.sort_by(|a, b| a.0.total_cmp(&b.0)),
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compare() {
+        assert_eq!(
+            Direction::Minimize.compare(1.0, 2.0),
+            cmp::Ordering::Greater
+        );
+        assert_eq!(Direction::Minimize.compare(2.0, 1.0), cmp::Ordering::Less);
+        assert_eq!(Direction::Minimize.compare(1.0, 1.0), cmp::Ordering::Equal);
+
+        assert_eq!(Direction::Maximize.compare(1.0, 2.0), cmp::Ordering::Less);
+        assert_eq!(
+            Direction::Maximize.compare(2.0, 1.0),
+            cmp::Ordering::Greater
+        );
+        assert_eq!(Direction::Maximize.compare(1.0, 1.0), cmp::Ordering::Equal);
     }
 }

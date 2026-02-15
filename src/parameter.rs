@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     convert::Infallible,
     hash::{self, Hash},
+    rc::Rc,
     str::FromStr,
     sync::Arc,
 };
@@ -203,7 +204,7 @@ impl ToString for Value {
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Profile(pub(crate) BTreeMap<Arc<str>, Arc<Specification>>);
+pub(crate) struct Profile(pub(crate) BTreeMap<Arc<str>, Rc<Specification>>);
 
 impl Profile {
     pub(crate) fn compiler_arguments(&self, instance: &Instance) -> Vec<String> {

@@ -1,108 +1,15 @@
-use crate::execution_result::ExecutionLog;
+pub(crate) mod execution_result;
+pub(crate) mod options;
+pub(crate) mod ranking;
+pub(crate) mod state;
+
+use crate::execution_log::ExecutionLog;
 use crate::parameter::{
     Instance, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
-use argh::FromArgs;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::time::SystemTime;
-use std::{collections::BTreeMap, fmt, sync::Arc};
-
-#[derive(FromArgs, PartialEq, Debug, Clone)]
-/// genetic search options
-#[argh(subcommand, name = "genetic")]
-pub(crate) struct GeneticSearchOptions {
-    #[argh(option, short = 'i', default = "128")]
-    /// initial population size (default: 128)
-    pub(crate) initial: usize,
-
-    #[argh(option, short = 'r', default = "4")]
-    /// number of instances that will remain at each generation (default: 4)
-    pub(crate) remain: usize,
-
-    #[argh(option, short = 'g', default = "96")]
-    /// number of instances that will be made at each generation (default: 96)
-    pub(crate) generate: usize,
-
-    #[argh(option, short = 'l', default = "128")]
-    /// maximum number of generations (default: 128)
-    pub(crate) limit: usize,
-
-    #[argh(option)]
-    /// output file
-    pub(crate) history: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub(crate) struct State {
-    pub(crate) generation: usize,
-    pub(crate) instances: Vec<Arc<Instance>>,
-}
-
-impl State {
-    fn sample(profile: &Profile) -> Arc<Instance> {
-        Arc::new(Instance::new(
-            profile
-                .0
-                .iter()
-                .map(|(name, parameter)| (name.clone(), parameter.get_space().random()))
-                .collect::<BTreeMap<Arc<str>, Value>>(),
-        ))
-    }
-
-    pub(crate) fn new(profile: &Profile, initial: usize) -> Self {
-        let mut instances = Vec::with_capacity(initial);
-        for _ in 0..initial {
-            instances.push(Self::sample(profile));
-        }
-        State {
-            generation: 1,
-            instances,
-        }
-    }
-
-    pub(crate) fn regenerate(&mut self, profile: &Profile, index: usize) {
-        self.instances[index] = Self::sample(profile);
-    }
-}
-
-#[derive(Serialize)]
-pub(crate) struct GenerationSummary {
-    pub(crate) timestamp: u64,
-    pub(crate) best_overall: Option<ExecutionLog>,
-    pub(crate) current_best: f64,
-    pub(crate) current_worst: f64,
-}
-
-impl fmt::Display for GenerationSummary {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Best overall: ")?;
-        if let Some(best_overall) = &self.best_overall {
-            writeln!(f, "{} ms", best_overall.1)?;
-        } else {
-            writeln!(f, "N/A")?;
-        }
-        writeln!(f, "Best: {} ms", self.current_best)?;
-        writeln!(f, "Worst: {} ms", self.current_worst)
-    }
-}
-
-impl GenerationSummary {
-    pub(crate) fn new(
-        best_overall: Option<ExecutionLog>,
-        (current_best, current_worst): (f64, f64),
-    ) -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        GenerationSummary {
-            timestamp,
-            best_overall,
-            current_best,
-            current_worst,
-        }
-    }
-}
+use std::{collections::BTreeMap, fmt};
 
 trait Genetic {
     fn get_genetic_space(&self) -> &dyn GeneticSpace;
@@ -224,6 +131,45 @@ impl GeneticSpace for KeywordSpace {
         // 10% chance to change the keyword
         if rand::random_bool(0.1) {
             *code = self.random();
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct GenerationSummary {
+    pub(crate) timestamp: u64,
+    pub(crate) best_overall: Option<ExecutionLog>,
+    pub(crate) current_best: f64,
+    pub(crate) current_worst: f64,
+}
+
+impl fmt::Display for GenerationSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Best overall: ")?;
+        if let Some(best_overall) = &self.best_overall {
+            writeln!(f, "{} ms", best_overall.1)?;
+        } else {
+            writeln!(f, "N/A")?;
+        }
+        writeln!(f, "Best: {} ms", self.current_best)?;
+        writeln!(f, "Worst: {} ms", self.current_worst)
+    }
+}
+
+impl GenerationSummary {
+    pub(crate) fn new(
+        best_overall: Option<ExecutionLog>,
+        (current_best, current_worst): (f64, f64),
+    ) -> Self {
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        GenerationSummary {
+            timestamp,
+            best_overall,
+            current_best,
+            current_worst,
         }
     }
 }
