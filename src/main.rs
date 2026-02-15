@@ -15,7 +15,7 @@ mod workspace;
 
 use crate::{
     context::Context,
-    direction::{Direction, Sort, SortAndReverse},
+    direction::{Direction, SortAndReverse},
     execution_log::IntoLogs,
     helper::Helper,
     hook::Hook,
@@ -222,7 +222,7 @@ impl<'a> Autotuner<'a> {
                     second!(state.into())
                 } else {
                     let mut output = ranking.to_vec();
-                    self.metadata.direction.sort(&mut output);
+                    output.reverse();
                     let output = output.into_logs(&self.metadata.profile);
                     first!(vec![
                         Output::new(path, output).expect("Failed to serialize object"),
@@ -405,7 +405,7 @@ impl<'a> Autotuner<'a> {
                     second!(state.into())
                 } else {
                     let mut output = ranking.to_vec();
-                    self.metadata.direction.sort(&mut output);
+                    output.reverse();
                     let output = output.into_logs(&self.metadata.profile);
                     let mut outputs =
                         vec![Output::new(path, output).expect("Failed to serialize object")];

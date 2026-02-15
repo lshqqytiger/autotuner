@@ -1,10 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cmp;
 
-pub(crate) trait Sort<T> {
-    fn sort(&self, results: &mut Vec<T>);
-}
-
 pub(crate) trait SortAndReverse<T> {
     fn sort_and_reverse(&self, results: &mut Vec<T>);
 }

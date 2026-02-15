@@ -1,5 +1,4 @@
 use crate::{
-    direction::{Direction, Sort},
     execution_log::{ExecutionLog, IntoLogs},
     parameter::{Instance, Profile},
 };
@@ -30,15 +29,6 @@ impl Ord for ExecutionResult {
 impl ExecutionResult {
     pub(crate) fn into_log(self, profile: &Profile) -> ExecutionLog {
         ExecutionLog(profile.display(&self.0), self.1)
-    }
-}
-
-impl Sort<ExecutionResult> for Direction {
-    fn sort(&self, results: &mut Vec<ExecutionResult>) {
-        match self {
-            Direction::Minimize => results.sort_by(|a, b| a.1.total_cmp(&b.1)),
-            Direction::Maximize => results.sort_by(|a, b| b.1.total_cmp(&a.1)),
-        }
     }
 }
 
