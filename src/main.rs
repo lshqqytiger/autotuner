@@ -15,7 +15,7 @@ mod workspace;
 
 use crate::{
     context::Context,
-    direction::{Direction, SortAndReverse},
+    direction::{Direction, Sort},
     execution_log::IntoLogs,
     helper::Helper,
     hook::Hook,
@@ -329,7 +329,7 @@ impl<'a> Autotuner<'a> {
                             Direction::Maximize => worst - pair.0,
                         };
                     }
-                    self.metadata.direction.sort_and_reverse(&mut inverted);
+                    self.metadata.direction.sort(&mut inverted);
                     inverted.truncate(inverted.len() - options.remain);
                     inverted.shuffle(&mut rng);
                     let holes = strategies::genetic::stochastic_universal_sampling(
