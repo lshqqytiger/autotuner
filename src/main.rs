@@ -50,7 +50,7 @@ struct Options {
     /// path to hook files
     hook: Vec<String>,
 
-    #[argh(option, short = 'm')]
+    #[argh(option, short = 'c')]
     /// path to configuration file (required)
     configuration: String,
 
