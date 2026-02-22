@@ -28,15 +28,13 @@ impl Ord for ExecutionResult {
 }
 
 impl ExecutionResult {
-    pub(crate) fn into_log(self, profile: &Profile) -> ExecutionLog {
+    pub(crate) fn log(&self, profile: &Profile) -> ExecutionLog {
         ExecutionLog(profile.display(&self.0), self.1)
     }
 }
 
 impl IntoLogs for Vec<ExecutionResult> {
     fn into_logs(self, profile: &Profile) -> Vec<ExecutionLog> {
-        self.into_iter()
-            .map(|result| result.into_log(profile))
-            .collect()
+        self.into_iter().map(|result| result.log(profile)).collect()
     }
 }

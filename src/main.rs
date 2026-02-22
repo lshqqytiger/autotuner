@@ -33,7 +33,7 @@ use libloading::Library;
 use rand::seq::SliceRandom;
 use serde::Serialize;
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, io, process, rc::Rc, time::SystemTime};
+use std::{cmp, fs, io, process, rc::Rc, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -54,10 +54,6 @@ struct Options {
     /// path to metadata file (required)
     metadata: String,
 
-    #[argh(subcommand)]
-    /// search strategy (default: genetic)
-    strategy: Strategy,
-
     #[argh(option, short = 'r', default = "15")]
     /// number of repetitions for each instance (default: 15)
     repetition: usize,
@@ -77,13 +73,6 @@ struct Options {
     #[argh(switch, short = 'v')]
     /// verbose output
     verbose: bool,
-}
-
-#[derive(FromArgs, PartialEq, Debug)]
-#[argh(subcommand)]
-enum Strategy {
-    Exhaustive(strategies::exhaustive::options::ExhaustiveSearchOptions),
-    Genetic(strategies::genetic::options::GeneticSearchOptions),
 }
 
 struct Output<'a>(&'a String, String);
@@ -127,8 +116,19 @@ impl<'a> Autotuner<'a> {
         hook: &'a [String],
         metadata: Metadata,
     ) -> anyhow::Result<Self> {
-        let temp_dir = TempDir::new("autotuner")?;
+        match &metadata.strategy {
+            strategies::Strategy::Exhaustive(_) => {}
+            strategies::Strategy::Genetic(options) => {
+                if options.initial <= 1 {
+                    return Err(anyhow!("Initial population size must be greater than 1"));
+                }
+                if options.generate == 0 {
+                    return Err(anyhow!("Number of each generation must be greater than 0"));
+                }
+            }
+        }
 
+        let temp_dir = TempDir::new("autotuner")?;
         fs::create_dir(temp_dir.path().join("instances"))?;
 
         let path = temp_dir.path().join("libhelper.so");
@@ -168,7 +168,6 @@ impl<'a> Autotuner<'a> {
 
     fn run(
         &'a self,
-        strategy: &'a Strategy,
         repetition: usize,
         candidates: usize,
         checkpoint: Option<Checkpoint>,
@@ -184,8 +183,8 @@ impl<'a> Autotuner<'a> {
             })
         };
 
-        let output = match strategy {
-            Strategy::Exhaustive(_) => {
+        let output = match &self.metadata.strategy {
+            strategies::Strategy::Exhaustive(_) => {
                 let mut ranking = strategies::exhaustive::ranking::Ranking::new(
                     &self.metadata.direction,
                     candidates,
@@ -229,7 +228,7 @@ impl<'a> Autotuner<'a> {
                     ])
                 }
             }
-            Strategy::Genetic(options) => {
+            strategies::Strategy::Genetic(options) => {
                 let mut ranking = strategies::genetic::ranking::Ranking::new(
                     &self.metadata.direction,
                     candidates,
@@ -254,13 +253,13 @@ impl<'a> Autotuner<'a> {
                             let result = if let Some(&result) = temp_results.get(&index) {
                                 result
                             } else {
-                                print!(
-                                    "{}/{} {}/{}: ",
-                                    state.generation,
-                                    options.limit,
-                                    index + 1,
-                                    len
-                                );
+                                print!("{}", state.generation);
+                                if let Some(limit) = options.terminate.limit {
+                                    print!("/{}", limit);
+                                } else {
+                                    print!(";");
+                                }
+                                print!(" {}/{}: ", index + 1, len);
 
                                 let result = self.evaluate(&state.instances[index], repetition);
                                 println!("{}", result);
@@ -300,23 +299,37 @@ impl<'a> Autotuner<'a> {
                         .map(|(x, _)| *x)
                         .filter(|x| x.is_finite());
                     let boundaries = self.metadata.direction.boundaries(iter);
-                    let summary = strategies::genetic::GenerationSummary::new(
-                        ranking
-                            .best()
-                            .cloned()
-                            .map(|x| x.into_log(&self.metadata.profile)),
-                        boundaries,
-                    );
+                    let peak = ranking
+                        .best()
+                        .map(|x| x.log(&self.metadata.profile))
+                        .unwrap();
+                    let best_overall = peak.1;
+                    let summary = strategies::genetic::GenerationSummary::new(peak, boundaries);
                     println!("=== Generation #{} Summary ===", state.generation);
                     println!("{}", summary);
                     history.push(summary);
 
                     state.generation += 1;
-                    if state.generation > options.limit {
-                        break;
+                    if let Some(limit) = options.terminate.limit {
+                        if state.generation > limit {
+                            break;
+                        }
                     }
 
                     let (best, worst) = boundaries;
+                    if self.metadata.direction.compare(best, best_overall) == cmp::Ordering::Greater
+                    {
+                        state.count = 0;
+                    } else {
+                        state.count += 1;
+                    }
+
+                    if let Some(endure) = options.terminate.endure {
+                        if state.count == endure {
+                            break;
+                        }
+                    }
+
                     let mut inverted = evaluation_results.clone();
                     for pair in &mut inverted {
                         if pair.0.is_infinite() {
@@ -365,16 +378,20 @@ impl<'a> Autotuner<'a> {
                             &state.instances[result[0]],
                             &state.instances[result[1]],
                         );
-                        strategies::genetic::mutate(&self.metadata.profile, &mut child);
+                        strategies::genetic::mutate(
+                            &self.metadata.profile,
+                            &options.mutate,
+                            &mut child,
+                        );
 
                         guard!(SIGQUIT, {
-                            print!(
-                                "{}/{} {}/{}: ",
-                                state.generation,
-                                options.limit,
-                                index + 1,
-                                options.generate
-                            );
+                            print!("{}", state.generation);
+                            if let Some(limit) = options.terminate.limit {
+                                print!("/{}", limit);
+                            } else {
+                                print!(";");
+                            }
+                            print!(" {}/{}: ", index + 1, options.generate);
 
                             let result = self.evaluate(&child, repetition);
                             println!("{}", result);
@@ -501,23 +518,6 @@ impl<'a> Autotuner<'a> {
 
 fn main() -> anyhow::Result<()> {
     let args: Options = argh::from_env();
-    match &args.strategy {
-        Strategy::Exhaustive(_) => {}
-        Strategy::Genetic(options) => {
-            if options.initial <= 1 {
-                return Err(anyhow!("Initial population size must be greater than 1"));
-            }
-            if options.generate == 0 {
-                return Err(anyhow!("Number of each generation must be greater than 0"));
-            }
-            if args.continue_.is_some() && options.history.is_some() {
-                return Err(anyhow!(
-                    "Cannot specify history output file when continuing from checkpoint"
-                ));
-            }
-        }
-    }
-
     let metadata = fs::read_to_string(&args.metadata).expect("Failed to read metadata file");
     let metadata =
         serde_json::from_str::<Metadata>(&metadata).expect("Failed to parse metadata file");
@@ -529,7 +529,6 @@ fn main() -> anyhow::Result<()> {
     });
     match_union!(
         autotuner.run(
-            &args.strategy,
             args.repetition,
             args.candidates,
             state,

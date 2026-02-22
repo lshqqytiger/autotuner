@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 #[derive(Serialize, Deserialize)]
 pub(crate) struct State {
     pub(crate) generation: usize,
+    pub(crate) count: usize,
     pub(crate) instances: Vec<Rc<Instance>>,
 }
 
@@ -26,6 +27,7 @@ impl State {
         }
         State {
             generation: 1,
+            count: 0,
             instances,
         }
     }

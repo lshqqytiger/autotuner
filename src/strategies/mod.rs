@@ -4,6 +4,12 @@ pub(crate) mod exhaustive;
 pub(crate) mod genetic;
 
 #[derive(Serialize, Deserialize)]
+pub(crate) enum Strategy {
+    Exhaustive(exhaustive::options::ExhaustiveSearchOptions),
+    Genetic(genetic::options::GeneticSearchOptions),
+}
+
+#[derive(Serialize, Deserialize)]
 pub(crate) enum Checkpoint {
     Exhaustive(exhaustive::state::State),
     Genetic(genetic::state::State),

@@ -7,6 +7,7 @@ use crate::execution_log::ExecutionLog;
 use crate::parameter::{
     Instance, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
+use crate::strategies::genetic::options::MutationOptions;
 use serde::Serialize;
 use std::time::SystemTime;
 use std::{collections::BTreeMap, fmt};
@@ -30,7 +31,7 @@ impl Genetic for Specification {
 
 trait GeneticSpace {
     fn crossover(&self, a: &Value, b: &Value) -> Value;
-    fn mutate(&self, value: &mut Value);
+    fn mutate(&self, options: &MutationOptions, value: &mut Value);
 }
 
 impl GeneticSpace for IntegerSpace {
@@ -50,20 +51,17 @@ impl GeneticSpace for IntegerSpace {
         }
     }
 
-    fn mutate(&self, code: &mut Value) {
+    fn mutate(&self, options: &MutationOptions, code: &mut Value) {
+        if !rand::random_bool(options.probability) {
+            return;
+        }
         match (self, code) {
             (IntegerSpace::Sequence(start, end), Value::Integer(n)) => {
-                // 10% chance to completely randomize the value
-                if rand::random_bool(0.1) {
-                    *n = rand::random_range(*start..=*end);
-                    return;
-                }
-
-                // variation in -10% ~ +10%
-                let mut variation = ((end - start) as f64 * 0.1) as i32;
+                let mut variation = ((end - start) as f64 * options.variation) as i32;
                 if variation == 0 {
                     variation = 1;
                 }
+
                 *n += rand::random_range(-variation..=variation);
 
                 if *n < *start {
@@ -73,10 +71,7 @@ impl GeneticSpace for IntegerSpace {
                 }
             }
             (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
-                // 10% chance
-                if rand::random_bool(0.1) {
-                    *i = rand::random_range(0..candidates.len());
-                }
+                *i = rand::random_range(0..candidates.len());
             }
             _ => unreachable!(),
         }
@@ -97,18 +92,13 @@ impl GeneticSpace for SwitchSpace {
         }
     }
 
-    fn mutate(&self, code: &mut Value) {
-        // 10% chance to completely randomize the switch
-        if rand::random_bool(0.1) {
-            *code = self.random();
+    fn mutate(&self, options: &MutationOptions, code: &mut Value) {
+        if !rand::random_bool(options.probability) {
             return;
         }
 
-        // 10% chance to flip the switch
-        if rand::random_bool(0.1) {
-            if let Value::Switch(b) = code {
-                *b = !*b;
-            }
+        if let Value::Switch(b) = code {
+            *b = !*b;
         }
     }
 }
@@ -127,9 +117,8 @@ impl GeneticSpace for KeywordSpace {
         }
     }
 
-    fn mutate(&self, code: &mut Value) {
-        // 10% chance to change the keyword
-        if rand::random_bool(0.1) {
+    fn mutate(&self, options: &MutationOptions, code: &mut Value) {
+        if rand::random_bool(options.probability) {
             *code = self.random();
         }
     }
@@ -138,7 +127,7 @@ impl GeneticSpace for KeywordSpace {
 #[derive(Serialize)]
 pub(crate) struct GenerationSummary {
     pub(crate) timestamp: u64,
-    pub(crate) best_overall: Option<ExecutionLog>,
+    pub(crate) best_overall: ExecutionLog,
     pub(crate) current_best: f64,
     pub(crate) current_worst: f64,
 }
@@ -146,11 +135,7 @@ pub(crate) struct GenerationSummary {
 impl fmt::Display for GenerationSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Best overall: ")?;
-        if let Some(best_overall) = &self.best_overall {
-            writeln!(f, "{} ms", best_overall.1)?;
-        } else {
-            writeln!(f, "N/A")?;
-        }
+        writeln!(f, "{} ms", self.best_overall.1)?;
         writeln!(f, "Best: {} ms", self.current_best)?;
         writeln!(f, "Worst: {} ms", self.current_worst)
     }
@@ -158,7 +143,7 @@ impl fmt::Display for GenerationSummary {
 
 impl GenerationSummary {
     pub(crate) fn new(
-        best_overall: Option<ExecutionLog>,
+        best_overall: ExecutionLog,
         (current_best, current_worst): (f64, f64),
     ) -> Self {
         let timestamp = SystemTime::now()
@@ -190,14 +175,14 @@ pub(crate) fn crossover(profile: &Profile, a: &Instance, b: &Instance) -> Instan
     Instance::new(parameters)
 }
 
-pub(crate) fn mutate(profile: &Profile, instance: &mut Instance) {
+pub(crate) fn mutate(profile: &Profile, options: &MutationOptions, instance: &mut Instance) {
     for (name, parameter) in &mut instance.parameters {
         profile
             .0
             .get(name)
             .unwrap()
             .get_genetic_space()
-            .mutate(parameter);
+            .mutate(options, parameter);
     }
 }
 

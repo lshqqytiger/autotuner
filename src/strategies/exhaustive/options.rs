@@ -1,6 +1,4 @@
-use argh::FromArgs;
+use serde::{Deserialize, Serialize};
 
-#[derive(FromArgs, PartialEq, Debug, Clone)]
-/// exhaustive search options
-#[argh(subcommand, name = "exhaustive")]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct ExhaustiveSearchOptions {}

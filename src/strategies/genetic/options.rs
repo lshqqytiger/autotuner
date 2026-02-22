@@ -1,26 +1,51 @@
-use argh::FromArgs;
+use serde::{Deserialize, Serialize};
 
-#[derive(FromArgs, PartialEq, Debug, Clone)]
-/// genetic search options
-#[argh(subcommand, name = "genetic")]
+fn default_initial() -> usize {
+    128
+}
+
+fn default_remain() -> usize {
+    4
+}
+
+fn default_generate() -> usize {
+    96
+}
+
+#[derive(Serialize, Deserialize)]
 pub(crate) struct GeneticSearchOptions {
-    #[argh(option, short = 'i', default = "128")]
-    /// initial population size (default: 128)
+    #[serde(default = "default_initial")]
     pub(crate) initial: usize,
-
-    #[argh(option, short = 'r', default = "4")]
-    /// number of instances that will remain at each generation (default: 4)
+    #[serde(default = "default_remain")]
     pub(crate) remain: usize,
-
-    #[argh(option, short = 'g', default = "96")]
-    /// number of instances that will be made at each generation (default: 96)
+    #[serde(default = "default_generate")]
     pub(crate) generate: usize,
-
-    #[argh(option, short = 'l', default = "128")]
-    /// maximum number of generations (default: 128)
-    pub(crate) limit: usize,
-
-    #[argh(option)]
-    /// output file
+    pub(crate) terminate: TerminationOptions,
+    pub(crate) mutate: MutationOptions,
+    #[serde(default)]
     pub(crate) history: Option<String>,
+}
+
+fn default_mutation_probability() -> f64 {
+    0.1
+}
+
+fn default_mutation_variation() -> f64 {
+    0.1
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct MutationOptions {
+    #[serde(default = "default_mutation_probability")]
+    pub(crate) probability: f64,
+    #[serde(default = "default_mutation_variation")]
+    pub(crate) variation: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct TerminationOptions {
+    #[serde(default)]
+    pub(crate) limit: Option<usize>,
+    #[serde(default)]
+    pub(crate) endure: Option<usize>,
 }

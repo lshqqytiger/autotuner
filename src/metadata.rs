@@ -1,10 +1,14 @@
-use crate::{criterion::Criterion, direction::Direction, helper, hook, parameter::Profile};
+use crate::{
+    criterion::Criterion, direction::Direction, helper, hook, parameter::Profile,
+    strategies::Strategy,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Metadata {
     pub(crate) direction: Direction,
     pub(crate) criterion: Criterion,
+    pub(crate) strategy: Strategy,
     pub(crate) profile: Profile,
     pub(crate) helper: helper::Configuration,
     pub(crate) runner: String,
