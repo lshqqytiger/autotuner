@@ -1,4 +1,5 @@
 mod compile;
+mod configuration;
 mod context;
 mod criterion;
 mod direction;
@@ -6,7 +7,6 @@ mod execution_log;
 mod heap;
 mod helper;
 mod hook;
-mod metadata;
 mod parameter;
 mod runner;
 mod strategies;
@@ -14,12 +14,12 @@ mod utils;
 mod workspace;
 
 use crate::{
+    configuration::Configuration,
     context::Context,
     direction::{Direction, Sort},
     execution_log::IntoLogs,
     helper::Helper,
     hook::Hook,
-    metadata::Metadata,
     parameter::Instance,
     runner::Runner,
     strategies::{exhaustive::Exhaustive, Checkpoint},
@@ -51,8 +51,8 @@ struct Options {
     hook: Vec<String>,
 
     #[argh(option, short = 'm')]
-    /// path to metadata file (required)
-    metadata: String,
+    /// path to configuration file (required)
+    configuration: String,
 
     #[argh(option, short = 'r', default = "15")]
     /// number of repetitions for each instance (default: 15)
@@ -90,7 +90,7 @@ impl<'a> Output<'a> {
 
 struct Autotuner<'a> {
     sources: &'a [String],
-    metadata: Metadata,
+    configuration: Configuration,
     temp_dir: TempDir,
     helper: Library,
     hook: Library,
@@ -102,7 +102,7 @@ impl<'a> Drop for Autotuner<'a> {
         unsafe {
             let helper = self
                 .helper
-                .get::<Helper>(self.metadata.helper.post.as_bytes())
+                .get::<Helper>(self.configuration.helper.post.as_bytes())
                 .unwrap();
             helper.call(&mut self.workspace);
         }
@@ -114,9 +114,9 @@ impl<'a> Autotuner<'a> {
         sources: &'a [String],
         helper: &'a [String],
         hook: &'a [String],
-        metadata: Metadata,
+        configuration: Configuration,
     ) -> anyhow::Result<Self> {
-        match &metadata.strategy {
+        match &configuration.strategy {
             strategies::Strategy::Exhaustive(_) => {}
             strategies::Strategy::Genetic(options) => {
                 if options.initial <= 1 {
@@ -133,17 +133,17 @@ impl<'a> Autotuner<'a> {
 
         let path = temp_dir.path().join("libhelper.so");
         compile::compile(
-            &metadata.compiler,
+            &configuration.compiler,
             &path,
-            helper.iter().chain(metadata.compiler_arguments.iter()),
+            helper.iter().chain(configuration.compiler_arguments.iter()),
         )?;
         let helper = unsafe { Library::new(&path) }?;
 
         let path = temp_dir.path().join("libhook.so");
         compile::compile(
-            &metadata.compiler,
+            &configuration.compiler,
             &path,
-            hook.iter().chain(metadata.compiler_arguments.iter()),
+            hook.iter().chain(configuration.compiler_arguments.iter()),
         )?;
         let hook = unsafe { Library::new(&path) }?;
 
@@ -151,14 +151,14 @@ impl<'a> Autotuner<'a> {
 
         unsafe {
             let initializer = helper
-                .get::<Helper>(metadata.helper.pre.as_bytes())
+                .get::<Helper>(configuration.helper.pre.as_bytes())
                 .unwrap();
             initializer.call(&mut workspace);
         }
 
         Ok(Autotuner {
             sources,
-            metadata,
+            configuration,
             temp_dir,
             helper,
             hook,
@@ -183,27 +183,27 @@ impl<'a> Autotuner<'a> {
             })
         };
 
-        let output = match &self.metadata.strategy {
+        let output = match &self.configuration.strategy {
             strategies::Strategy::Exhaustive(_) => {
                 let mut ranking = strategies::exhaustive::ranking::Ranking::new(
-                    &self.metadata.direction,
+                    &self.configuration.direction,
                     candidates,
                 );
                 let mut state = if let Some(Checkpoint::Exhaustive(state)) = checkpoint {
                     state
                 } else {
-                    self.metadata.profile.iter()
+                    self.configuration.profile.iter()
                 };
 
                 let mut count = 1;
                 for instance in &mut state {
                     guard!(SIGQUIT, {
-                        println!("{}/{}: ", count, self.metadata.profile.len());
+                        println!("{}/{}: ", count, self.configuration.profile.len());
 
                         let result = self.evaluate(&instance, repetition);
                         println!("{}", result);
                         if verbose {
-                            println!("{}", self.metadata.profile.display(&instance));
+                            println!("{}", self.configuration.profile.display(&instance));
                         }
                         println!();
 
@@ -222,7 +222,7 @@ impl<'a> Autotuner<'a> {
                 } else {
                     let mut output = ranking.to_vec();
                     output.reverse();
-                    let output = output.into_logs(&self.metadata.profile);
+                    let output = output.into_logs(&self.configuration.profile);
                     first!(vec![
                         Output::new(path, output).expect("Failed to serialize object"),
                     ])
@@ -230,13 +230,16 @@ impl<'a> Autotuner<'a> {
             }
             strategies::Strategy::Genetic(options) => {
                 let mut ranking = strategies::genetic::ranking::Ranking::new(
-                    &self.metadata.direction,
+                    &self.configuration.direction,
                     candidates,
                 );
                 let mut state = if let Some(Checkpoint::Genetic(state)) = checkpoint {
                     state
                 } else {
-                    strategies::genetic::state::State::new(&self.metadata.profile, options.initial)
+                    strategies::genetic::state::State::new(
+                        &self.configuration.profile,
+                        options.initial,
+                    )
                 };
                 let mut history = Vec::new();
 
@@ -266,7 +269,7 @@ impl<'a> Autotuner<'a> {
                                 if verbose {
                                     println!(
                                         "{}",
-                                        self.metadata.profile.display(&state.instances[index])
+                                        self.configuration.profile.display(&state.instances[index])
                                     );
                                 }
                                 println!();
@@ -275,7 +278,7 @@ impl<'a> Autotuner<'a> {
                             };
 
                             if state.generation == 1 && result.is_infinite() {
-                                state.regenerate(&self.metadata.profile, index);
+                                state.regenerate(&self.configuration.profile, index);
                                 continue;
                             } else {
                                 ranking.push(state.instances[index].clone(), result);
@@ -298,10 +301,10 @@ impl<'a> Autotuner<'a> {
                         .iter()
                         .map(|(x, _)| *x)
                         .filter(|x| x.is_finite());
-                    let boundaries = self.metadata.direction.boundaries(iter);
+                    let boundaries = self.configuration.direction.boundaries(iter);
                     let peak = ranking
                         .best()
-                        .map(|x| x.log(&self.metadata.profile))
+                        .map(|x| x.log(&self.configuration.profile))
                         .unwrap();
                     let best_overall = peak.1;
                     let summary = strategies::genetic::GenerationSummary::new(peak, boundaries);
@@ -317,7 +320,8 @@ impl<'a> Autotuner<'a> {
                     }
 
                     let (best, worst) = boundaries;
-                    if self.metadata.direction.compare(best, best_overall) == cmp::Ordering::Greater
+                    if self.configuration.direction.compare(best, best_overall)
+                        == cmp::Ordering::Greater
                     {
                         state.count = 0;
                     } else {
@@ -337,12 +341,12 @@ impl<'a> Autotuner<'a> {
                             continue;
                         }
 
-                        pair.0 = match self.metadata.direction {
+                        pair.0 = match self.configuration.direction {
                             Direction::Minimize => pair.0,
                             Direction::Maximize => worst - pair.0,
                         };
                     }
-                    self.metadata.direction.sort(&mut inverted);
+                    self.configuration.direction.sort(&mut inverted);
                     inverted.truncate(inverted.len() - options.remain);
                     inverted.shuffle(&mut rng);
                     let holes = strategies::genetic::stochastic_universal_sampling(
@@ -357,7 +361,7 @@ impl<'a> Autotuner<'a> {
                             continue;
                         }
 
-                        result.0 = match self.metadata.direction {
+                        result.0 = match self.configuration.direction {
                             Direction::Minimize => worst - result.0,
                             Direction::Maximize => result.0,
                         };
@@ -374,12 +378,12 @@ impl<'a> Autotuner<'a> {
                             2,
                         );
                         let mut child = strategies::genetic::crossover(
-                            &self.metadata.profile,
+                            &self.configuration.profile,
                             &state.instances[result[0]],
                             &state.instances[result[1]],
                         );
                         strategies::genetic::mutate(
-                            &self.metadata.profile,
+                            &self.configuration.profile,
                             &options.mutate,
                             &mut child,
                         );
@@ -396,7 +400,7 @@ impl<'a> Autotuner<'a> {
                             let result = self.evaluate(&child, repetition);
                             println!("{}", result);
                             if verbose {
-                                println!("{}", self.metadata.profile.display(&child));
+                                println!("{}", self.configuration.profile.display(&child));
                             }
                             println!();
 
@@ -423,7 +427,7 @@ impl<'a> Autotuner<'a> {
                 } else {
                     let mut output = ranking.to_vec();
                     output.reverse();
-                    let output = output.into_logs(&self.metadata.profile);
+                    let output = output.into_logs(&self.configuration.profile);
                     let mut outputs =
                         vec![Output::new(path, output).expect("Failed to serialize object")];
                     if let Some(path) = &options.history {
@@ -448,18 +452,18 @@ impl<'a> Autotuner<'a> {
         let temp_dir = self.temp_dir.path();
 
         let mut context = Context::new(
-            &self.metadata.profile,
+            &self.configuration.profile,
             instance,
             temp_dir.as_os_str().as_encoded_bytes(),
         );
-        for name in &self.metadata.hooks.pre {
+        for name in &self.configuration.hooks.pre {
             unsafe {
                 let task = self.hook.get::<Hook>(name.as_bytes()).unwrap();
                 task.call(&mut context, &self.workspace);
             }
         }
         if let context::Result::Invalid = context.result {
-            return self.metadata.criterion.invalid();
+            return self.configuration.criterion.invalid();
         }
 
         let path = temp_dir
@@ -468,18 +472,23 @@ impl<'a> Autotuner<'a> {
             .with_extension("so");
         if !path.exists() {
             compile::compile(
-                &self.metadata.compiler,
+                &self.configuration.compiler,
                 &path,
                 self.sources
                     .iter()
-                    .chain(self.metadata.compiler_arguments.iter())
+                    .chain(self.configuration.compiler_arguments.iter())
                     .chain(context.arguments.iter())
-                    .chain(self.metadata.profile.compiler_arguments(&instance).iter()),
+                    .chain(
+                        self.configuration
+                            .profile
+                            .compiler_arguments(&instance)
+                            .iter(),
+                    ),
             )
             .unwrap();
         }
         let lib = unsafe { Library::new(&path) }.unwrap();
-        let runner = unsafe { lib.get::<Runner>(self.metadata.runner.as_bytes()) }.unwrap();
+        let runner = unsafe { lib.get::<Runner>(self.configuration.runner.as_bytes()) }.unwrap();
 
         let mut fitnesses = Vec::with_capacity(repetition);
         for _ in 0..repetition {
@@ -494,7 +503,7 @@ impl<'a> Autotuner<'a> {
                     unregister(id);
                 }
             };
-            let fitness = context.result.unwrap(&self.metadata.criterion);
+            let fitness = context.result.unwrap(&self.configuration.criterion);
             if fitness.is_nan() {
                 panic!("NaN value encountered");
             }
@@ -503,26 +512,28 @@ impl<'a> Autotuner<'a> {
 
         drop(lib);
 
-        context.result = context::Result::Valid(self.metadata.criterion.representative(fitnesses));
+        context.result =
+            context::Result::Valid(self.configuration.criterion.representative(fitnesses));
 
-        for name in &self.metadata.hooks.post {
+        for name in &self.configuration.hooks.post {
             unsafe {
                 let task = self.hook.get::<Hook>(name.as_bytes()).unwrap();
                 task.call(&mut context, &self.workspace);
             }
         }
 
-        context.result.unwrap(&self.metadata.criterion)
+        context.result.unwrap(&self.configuration.criterion)
     }
 }
 
 fn main() -> anyhow::Result<()> {
     let args: Options = argh::from_env();
-    let metadata = fs::read_to_string(&args.metadata).expect("Failed to read metadata file");
-    let metadata =
-        serde_json::from_str::<Metadata>(&metadata).expect("Failed to parse metadata file");
+    let configuration =
+        fs::read_to_string(&args.configuration).expect("Failed to read configuration file");
+    let configuration = serde_json::from_str::<Configuration>(&configuration)
+        .expect("Failed to parse configuration file");
 
-    let autotuner = Autotuner::new(&args.sources, &args.helper, &args.hook, metadata)?;
+    let autotuner = Autotuner::new(&args.sources, &args.helper, &args.hook, configuration)?;
     let state = args.continue_.as_ref().map(|filename| {
         let content = fs::read_to_string(filename).expect("Failed to read checkpoint file");
         serde_json::from_str::<Checkpoint>(&content).expect("Failed to parse checkpoint file")

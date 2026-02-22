@@ -5,7 +5,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Metadata {
+pub(crate) struct Configuration {
     pub(crate) direction: Direction,
     pub(crate) criterion: Criterion,
     pub(crate) strategy: Strategy,
