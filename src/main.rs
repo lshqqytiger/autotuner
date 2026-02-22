@@ -33,7 +33,7 @@ use libloading::Library;
 use rand::seq::SliceRandom;
 use serde::Serialize;
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{cmp, fs, io, process, rc::Rc, time::SystemTime};
+use std::{fs, io, process, rc::Rc, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -317,8 +317,11 @@ impl<'a> Autotuner<'a> {
                     history.push(summary);
 
                     let (best, worst) = boundaries;
-                    if self.configuration.direction.compare(best, previous_best)
-                        == cmp::Ordering::Greater
+                    if self
+                        .configuration
+                        .direction
+                        .compare(best, previous_best)
+                        .is_gt()
                     {
                         state.count = 0;
                         previous_best = best;
