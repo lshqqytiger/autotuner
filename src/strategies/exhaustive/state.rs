@@ -1,4 +1,4 @@
-use crate::parameter::{Instance, Specification, Value};
+use crate::parameter::{Individual, Specification, Value};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
@@ -11,7 +11,7 @@ pub(crate) struct State {
 }
 
 impl Iterator for State {
-    type Item = Instance;
+    type Item = Individual;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -24,7 +24,7 @@ impl Iterator for State {
             .cloned()
             .zip(self.values.iter().cloned())
             .collect::<BTreeMap<Arc<str>, Value>>();
-        let instance = Instance::new(parameters);
+        let individual = Individual::new(parameters);
 
         for index in (0..self.values.len()).rev() {
             if let Some(next_value) = self.specifications[index]
@@ -35,11 +35,11 @@ impl Iterator for State {
                 for reset_index in index + 1..self.values.len() {
                     self.values[reset_index] = self.specifications[reset_index].get_space().first();
                 }
-                return Some(instance);
+                return Some(individual);
             }
         }
 
         self.done = true;
-        Some(instance)
+        Some(individual)
     }
 }

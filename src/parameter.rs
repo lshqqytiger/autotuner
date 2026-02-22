@@ -207,9 +207,9 @@ impl ToString for Value {
 pub(crate) struct Profile(pub(crate) BTreeMap<Arc<str>, Rc<Specification>>);
 
 impl Profile {
-    pub(crate) fn compiler_arguments(&self, instance: &Instance) -> Vec<String> {
+    pub(crate) fn compiler_arguments(&self, individual: &Individual) -> Vec<String> {
         let mut arguments = Vec::new();
-        for (name, value) in &instance.parameters {
+        for (name, value) in &individual.parameters {
             match (self.0.get(name).unwrap().as_ref(), value) {
                 (
                     Specification::Integer {
@@ -262,8 +262,8 @@ impl Profile {
         arguments
     }
 
-    pub(crate) fn display(&self, instance: &Instance) -> String {
-        instance
+    pub(crate) fn display(&self, individual: &Individual) -> String {
+        individual
             .parameters
             .iter()
             .map(|(name, value)| {
@@ -320,18 +320,18 @@ impl Profile {
     }
 }
 
-pub(crate) struct Instance {
+pub(crate) struct Individual {
     pub(crate) id: Arc<str>,
     pub(crate) parameters: BTreeMap<Arc<str>, Value>,
 }
 
-impl Hash for Instance {
+impl Hash for Individual {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
 
-impl Serialize for Instance {
+impl Serialize for Individual {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -344,7 +344,7 @@ impl Serialize for Instance {
     }
 }
 
-impl<'de> Deserialize<'de> for Instance {
+impl<'de> Deserialize<'de> for Individual {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -354,13 +354,13 @@ impl<'de> Deserialize<'de> for Instance {
         for (name, code) in pairs {
             parameters.insert(name.intern(), code);
         }
-        Ok(Instance::new(parameters))
+        Ok(Individual::new(parameters))
     }
 }
 
-impl Instance {
+impl Individual {
     pub(crate) fn new(parameters: BTreeMap<Arc<str>, Value>) -> Self {
-        Instance {
+        Individual {
             id: Sha256::digest(serde_json::to_vec(&parameters).unwrap())
                 .iter()
                 .map(|b| format!("{:02x}", b))

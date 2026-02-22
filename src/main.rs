@@ -20,7 +20,7 @@ use crate::{
     execution_log::IntoLogs,
     helper::Helper,
     hook::Hook,
-    parameter::Instance,
+    parameter::Individual,
     runner::Runner,
     strategies::{exhaustive::Exhaustive, Checkpoint},
     utils::{manually_move::ManuallyMove, union::Union},
@@ -55,7 +55,7 @@ struct Options {
     configuration: String,
 
     #[argh(option, short = 'r', default = "15")]
-    /// number of repetitions for each instance (default: 15)
+    /// number of repetitions for each individual (default: 15)
     repetition: usize,
 
     #[argh(option, default = "32")]
@@ -129,7 +129,7 @@ impl<'a> Autotuner<'a> {
         }
 
         let temp_dir = TempDir::new("autotuner")?;
-        fs::create_dir(temp_dir.path().join("instances"))?;
+        fs::create_dir(temp_dir.path().join("individuals"))?;
 
         let path = temp_dir.path().join("libhelper.so");
         compile::compile(
@@ -196,18 +196,18 @@ impl<'a> Autotuner<'a> {
                 };
 
                 let mut count = 1;
-                for instance in &mut state {
+                for individual in &mut state {
                     guard!(SIGQUIT, {
                         println!("{}/{}: ", count, self.configuration.profile.len());
 
-                        let result = self.evaluate(&instance, repetition);
+                        let result = self.evaluate(&individual, repetition);
                         println!("{}", result);
                         if verbose {
-                            println!("{}", self.configuration.profile.display(&instance));
+                            println!("{}", self.configuration.profile.display(&individual));
                         }
                         println!();
 
-                        ranking.push(instance, result);
+                        ranking.push(individual, result);
                     });
 
                     if *is_canceled {
@@ -247,10 +247,10 @@ impl<'a> Autotuner<'a> {
                 let mut temp_results = FxHashMap::default();
                 let mut previous_best = self.configuration.direction.worst();
                 loop {
-                    let mut evaluation_results = Vec::with_capacity(state.instances.len());
+                    let mut evaluation_results = Vec::with_capacity(state.individuals.len());
 
-                    // evaluate instances
-                    let len = state.instances.len();
+                    // evaluate individuals
+                    let len = state.individuals.len();
                     let mut index = 0;
                     while index < len {
                         guard!(SIGQUIT, {
@@ -265,12 +265,14 @@ impl<'a> Autotuner<'a> {
                                 }
                                 print!(" {}/{}: ", index + 1, len);
 
-                                let result = self.evaluate(&state.instances[index], repetition);
+                                let result = self.evaluate(&state.individuals[index], repetition);
                                 println!("{}", result);
                                 if verbose {
                                     println!(
                                         "{}",
-                                        self.configuration.profile.display(&state.instances[index])
+                                        self.configuration
+                                            .profile
+                                            .display(&state.individuals[index])
                                     );
                                 }
                                 println!();
@@ -282,7 +284,7 @@ impl<'a> Autotuner<'a> {
                                 state.regenerate(&self.configuration.profile, index);
                                 continue;
                             } else {
-                                ranking.push(state.instances[index].clone(), result);
+                                ranking.push(state.individuals[index].clone(), result);
                                 evaluation_results.push((result, index));
                                 index += 1;
                             }
@@ -303,14 +305,33 @@ impl<'a> Autotuner<'a> {
                         .map(|(x, _)| *x)
                         .filter(|x| x.is_finite());
                     let boundaries = self.configuration.direction.boundaries(iter);
-                    let peak = ranking
-                        .best()
-                        .map(|x| x.log(&self.configuration.profile))
-                        .unwrap();
-                    let summary = strategies::genetic::GenerationSummary::new(peak, boundaries);
+                    let summary = strategies::genetic::GenerationSummary::new(
+                        ranking
+                            .best()
+                            .map(|x| x.log(&self.configuration.profile))
+                            .unwrap(),
+                        boundaries,
+                    );
                     println!("=== Generation #{} Summary ===", state.generation);
                     println!("{}", summary);
                     history.push(summary);
+
+                    let (best, worst) = boundaries;
+                    if self.configuration.direction.compare(best, previous_best)
+                        == cmp::Ordering::Greater
+                    {
+                        state.count = 0;
+                        previous_best = best;
+                    } else {
+                        state.count += 1;
+                    }
+
+                    // termination check
+                    if let Some(endure) = options.terminate.endure {
+                        if state.count == endure {
+                            break;
+                        }
+                    }
 
                     state.generation += 1;
                     if let Some(limit) = options.terminate.limit {
@@ -319,22 +340,7 @@ impl<'a> Autotuner<'a> {
                         }
                     }
 
-                    let (best, worst) = boundaries;
-                    if self.configuration.direction.compare(best, previous_best)
-                        == cmp::Ordering::Greater
-                    {
-                        state.count = 0;
-                    } else {
-                        state.count += 1;
-                    }
-                    previous_best = peak.1;
-
-                    if let Some(endure) = options.terminate.endure {
-                        if state.count == endure {
-                            break;
-                        }
-                    }
-
+                    // select individuals to remove
                     let mut inverted = evaluation_results.clone();
                     for pair in &mut inverted {
                         if pair.0.is_infinite() {
@@ -380,8 +386,8 @@ impl<'a> Autotuner<'a> {
                         );
                         let mut child = strategies::genetic::crossover(
                             &self.configuration.profile,
-                            &state.instances[result[0]],
-                            &state.instances[result[1]],
+                            &state.individuals[result[0]],
+                            &state.individuals[result[1]],
                         );
                         strategies::genetic::mutate(
                             &self.configuration.profile,
@@ -417,9 +423,9 @@ impl<'a> Autotuner<'a> {
                         index += 1;
                     }
 
-                    // replace instances with children
-                    for (index, instance) in children.into_iter().enumerate() {
-                        state.instances[holes[index]] = Rc::new(instance);
+                    // replace individuals with children
+                    for (index, individual) in children.into_iter().enumerate() {
+                        state.individuals[holes[index]] = Rc::new(individual);
                     }
                 }
 
@@ -449,12 +455,12 @@ impl<'a> Autotuner<'a> {
         output
     }
 
-    fn evaluate(&self, instance: &Instance, repetition: usize) -> f64 {
+    fn evaluate(&self, individual: &Individual, repetition: usize) -> f64 {
         let temp_dir = self.temp_dir.path();
 
         let mut context = Context::new(
             &self.configuration.profile,
-            instance,
+            individual,
             temp_dir.as_os_str().as_encoded_bytes(),
         );
         for name in &self.configuration.hooks.pre {
@@ -468,8 +474,8 @@ impl<'a> Autotuner<'a> {
         }
 
         let path = temp_dir
-            .join("instances")
-            .join(instance.id.as_ref())
+            .join("individuals")
+            .join(individual.id.as_ref())
             .with_extension("so");
         if !path.exists() {
             compile::compile(
@@ -482,7 +488,7 @@ impl<'a> Autotuner<'a> {
                     .chain(
                         self.configuration
                             .profile
-                            .compiler_arguments(&instance)
+                            .compiler_arguments(&individual)
                             .iter(),
                     ),
             )

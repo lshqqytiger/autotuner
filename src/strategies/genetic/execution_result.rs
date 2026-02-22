@@ -1,11 +1,11 @@
 use crate::{
     execution_log::{ExecutionLog, IntoLogs},
-    parameter::{Instance, Profile},
+    parameter::{Individual, Profile},
 };
 use std::{cmp, rc::Rc};
 
 #[derive(Clone)]
-pub(crate) struct ExecutionResult(pub(crate) Rc<Instance>, pub(crate) f64);
+pub(crate) struct ExecutionResult(pub(crate) Rc<Individual>, pub(crate) f64);
 
 impl PartialEq for ExecutionResult {
     fn eq(&self, other: &Self) -> bool {

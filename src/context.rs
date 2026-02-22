@@ -1,6 +1,6 @@
 use crate::{
     criterion::Criterion,
-    parameter::{Instance, Profile},
+    parameter::{Individual, Profile},
 };
 
 pub(crate) enum Result {
@@ -21,7 +21,7 @@ impl Result {
 
 pub(crate) struct Context<'a> {
     pub(crate) profile: &'a Profile,
-    pub(crate) instance: &'a Instance,
+    pub(crate) individual: &'a Individual,
     pub(crate) temp_dir: &'a [u8],
     pub(crate) arguments: Vec<String>,
     pub(crate) result: Result,
@@ -30,12 +30,12 @@ pub(crate) struct Context<'a> {
 impl<'a> Context<'a> {
     pub(crate) fn new(
         profile: &'a Profile,
-        instance: &'a Instance,
+        instance: &'a Individual,
         temp_dir: &'a [u8],
     ) -> Context<'a> {
         Context {
             profile,
-            instance,
+            individual: instance,
             temp_dir,
             arguments: Vec::new(),
             result: Result::Unknown,

@@ -5,7 +5,7 @@ pub(crate) mod state;
 
 use crate::execution_log::ExecutionLog;
 use crate::parameter::{
-    Instance, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
+    Individual, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
 use crate::strategies::genetic::options::MutationOptions;
 use serde::Serialize;
@@ -159,7 +159,7 @@ impl GenerationSummary {
     }
 }
 
-pub(crate) fn crossover(profile: &Profile, a: &Instance, b: &Instance) -> Instance {
+pub(crate) fn crossover(profile: &Profile, a: &Individual, b: &Individual) -> Individual {
     let mut parameters = BTreeMap::new();
     for parameter in &a.parameters {
         parameters.insert(
@@ -172,11 +172,11 @@ pub(crate) fn crossover(profile: &Profile, a: &Instance, b: &Instance) -> Instan
                 .crossover(&a.parameters[parameter.0], &b.parameters[parameter.0]),
         );
     }
-    Instance::new(parameters)
+    Individual::new(parameters)
 }
 
-pub(crate) fn mutate(profile: &Profile, options: &MutationOptions, instance: &mut Instance) {
-    for (name, parameter) in &mut instance.parameters {
+pub(crate) fn mutate(profile: &Profile, options: &MutationOptions, individual: &mut Individual) {
+    for (name, parameter) in &mut individual.parameters {
         profile
             .0
             .get(name)

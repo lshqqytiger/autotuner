@@ -1,10 +1,10 @@
 use crate::{
     execution_log::{ExecutionLog, IntoLogs},
-    parameter::{Instance, Profile},
+    parameter::{Individual, Profile},
 };
 use std::cmp;
 
-pub(crate) struct ExecutionResult(pub(crate) Instance, pub(crate) f64);
+pub(crate) struct ExecutionResult(pub(crate) Individual, pub(crate) f64);
 
 impl PartialEq for ExecutionResult {
     fn eq(&self, other: &Self) -> bool {

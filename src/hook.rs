@@ -103,7 +103,7 @@ extern "C" fn parameter_get_int(ctx: *mut Context, name: *const ffi::c_char) -> 
     } else {
         return ptr::null();
     };
-    let value = if let Some(value) = ctx.instance.parameters.get(&name) {
+    let value = if let Some(value) = ctx.individual.parameters.get(&name) {
         value
     } else {
         return ptr::null();

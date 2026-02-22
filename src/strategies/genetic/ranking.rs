@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    direction::Direction, heap::Heap, parameter::Instance,
+    direction::Direction, heap::Heap, parameter::Individual,
     strategies::genetic::execution_result::ExecutionResult,
 };
 
@@ -21,8 +21,8 @@ impl Ranking {
         }
     }
 
-    pub(crate) fn push(&mut self, instance: Rc<Instance>, fitness: f64) {
-        let result = ExecutionResult(instance, fitness);
+    pub(crate) fn push(&mut self, individual: Rc<Individual>, fitness: f64) {
+        let result = ExecutionResult(individual, fitness);
         self.heap.push(result);
         if self.heap.len() > self.capacity {
             self.heap.pop();
@@ -60,11 +60,11 @@ mod tests {
     #[test]
     fn test_ranking() {
         let mut ranking = Ranking::new(&Direction::Minimize, 3);
-        ranking.push(Rc::new(Instance::new(BTreeMap::new())), 1.0);
-        ranking.push(Rc::new(Instance::new(BTreeMap::new())), 2.0);
-        ranking.push(Rc::new(Instance::new(BTreeMap::new())), 3.0);
-        ranking.push(Rc::new(Instance::new(BTreeMap::new())), 0.5);
-        ranking.push(Rc::new(Instance::new(BTreeMap::new())), 4.0);
+        ranking.push(Rc::new(Individual::new(BTreeMap::new())), 1.0);
+        ranking.push(Rc::new(Individual::new(BTreeMap::new())), 2.0);
+        ranking.push(Rc::new(Individual::new(BTreeMap::new())), 3.0);
+        ranking.push(Rc::new(Individual::new(BTreeMap::new())), 0.5);
+        ranking.push(Rc::new(Individual::new(BTreeMap::new())), 4.0);
 
         let mut results = ranking.to_vec();
         results.reverse();
