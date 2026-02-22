@@ -41,6 +41,13 @@ impl<'de> Deserialize<'de> for Direction {
 }
 
 impl Direction {
+    pub(crate) fn worst(&self) -> f64 {
+        match self {
+            Direction::Minimize => f64::INFINITY,
+            Direction::Maximize => f64::NEG_INFINITY,
+        }
+    }
+
     pub(crate) fn compare(&self, a: f64, b: f64) -> cmp::Ordering {
         match self {
             Direction::Minimize => b.total_cmp(&a),

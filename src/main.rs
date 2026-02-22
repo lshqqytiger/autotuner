@@ -245,6 +245,7 @@ impl<'a> Autotuner<'a> {
 
                 let mut rng = rand::rng();
                 let mut temp_results = FxHashMap::default();
+                let mut previous_best = self.configuration.direction.worst();
                 loop {
                     let mut evaluation_results = Vec::with_capacity(state.instances.len());
 
@@ -306,7 +307,6 @@ impl<'a> Autotuner<'a> {
                         .best()
                         .map(|x| x.log(&self.configuration.profile))
                         .unwrap();
-                    let best_overall = peak.1;
                     let summary = strategies::genetic::GenerationSummary::new(peak, boundaries);
                     println!("=== Generation #{} Summary ===", state.generation);
                     println!("{}", summary);
@@ -320,13 +320,14 @@ impl<'a> Autotuner<'a> {
                     }
 
                     let (best, worst) = boundaries;
-                    if self.configuration.direction.compare(best, best_overall)
+                    if self.configuration.direction.compare(best, previous_best)
                         == cmp::Ordering::Greater
                     {
                         state.count = 0;
                     } else {
                         state.count += 1;
                     }
+                    previous_best = peak.1;
 
                     if let Some(endure) = options.terminate.endure {
                         if state.count == endure {
