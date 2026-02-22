@@ -30,12 +30,12 @@ pub(crate) struct Context<'a> {
 impl<'a> Context<'a> {
     pub(crate) fn new(
         profile: &'a Profile,
-        instance: &'a Individual,
+        individual: &'a Individual,
         temp_dir: &'a [u8],
     ) -> Context<'a> {
         Context {
             profile,
-            individual: instance,
+            individual,
             temp_dir,
             arguments: Vec::new(),
             result: Result::Unknown,
