@@ -32,7 +32,7 @@ use libloading::Library;
 use rand::seq::SliceRandom;
 use serde::Serialize;
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, io, process, rc::Rc, time::SystemTime};
+use std::{fs, hint, io, process, rc::Rc, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -269,7 +269,9 @@ impl<'a> Autotuner<'a> {
 
                 let mut rng = rand::rng();
                 let mut temp_results = FxHashMap::default();
-                let mut best_overall = self.configuration.direction.worst();
+                // Rust compiler somehow optimizes this function call or later is_gt() call in wrong way
+                // so wrap this call with black_box to prevent optimization
+                let mut best_overall = hint::black_box(self.configuration.direction.worst());
                 loop {
                     let mut evaluation_results = Vec::with_capacity(state.individuals.len());
 
