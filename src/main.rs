@@ -135,7 +135,7 @@ impl<'a> Autotuner<'a> {
 
         let cores = if let Some(cores) = cores {
             if affinity::get_thread_affinity().is_err() {
-                println!("[WARNING] Failed to get thread affinity");
+                eprintln!("[WARNING] Failed to get thread affinity");
                 None
             } else {
                 if cores.is_empty() {
