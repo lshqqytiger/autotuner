@@ -14,6 +14,15 @@ pub(crate) struct Configuration {
     pub(crate) post: Vec<String>,
 }
 
+impl Default for Configuration {
+    fn default() -> Self {
+        Self {
+            pre: Vec::new(),
+            post: Vec::new(),
+        }
+    }
+}
+
 type Function = unsafe extern "C" fn(
     ctx: *mut Context,
     ws: *const Workspace,

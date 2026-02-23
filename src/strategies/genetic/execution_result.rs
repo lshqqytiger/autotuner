@@ -29,7 +29,7 @@ impl Ord for ExecutionResult {
 
 impl ExecutionResult {
     pub(crate) fn log(&self, profile: &Profile) -> ExecutionLog {
-        ExecutionLog(profile.display(&self.0), self.1)
+        ExecutionLog(profile.stringify(&self.0), self.1)
     }
 }
 

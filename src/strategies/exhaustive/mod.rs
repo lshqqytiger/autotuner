@@ -7,7 +7,7 @@ use crate::{
     parameter::{Profile, Specification, Value},
     strategies::exhaustive::state::State,
 };
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 pub(crate) trait Exhaustive {
     fn iter(&self) -> State;
@@ -19,7 +19,7 @@ impl Exhaustive for Profile {
         let specifications = names
             .iter()
             .map(|name| self.0.get(name).unwrap().clone())
-            .collect::<Vec<Rc<Specification>>>();
+            .collect::<Vec<Arc<Specification>>>();
         let values = specifications
             .iter()
             .map(|specification| specification.get_space().first())

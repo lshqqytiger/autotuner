@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod exhaustive;
 pub(crate) mod genetic;
 
+mod heap;
+
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Strategy {
     Exhaustive(exhaustive::options::ExhaustiveSearchOptions),

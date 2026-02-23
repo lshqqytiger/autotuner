@@ -8,9 +8,10 @@ use crate::parameter::{
     Individual, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
 use crate::strategies::genetic::options::MutationOptions;
+use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::time::SystemTime;
-use std::{collections::BTreeMap, fmt};
 
 trait Genetic {
     fn get_genetic_space(&self) -> &dyn GeneticSpace;
@@ -127,23 +128,23 @@ impl GeneticSpace for KeywordSpace {
 #[derive(Serialize)]
 pub(crate) struct GenerationSummary {
     pub(crate) timestamp: u64,
-    pub(crate) best_overall: ExecutionLog,
+    pub(crate) global_best: ExecutionLog,
     pub(crate) current_best: f64,
     pub(crate) current_worst: f64,
 }
 
-impl fmt::Display for GenerationSummary {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Best overall: ")?;
-        writeln!(f, "{} ms", self.best_overall.1)?;
-        writeln!(f, "Best: {} ms", self.current_best)?;
-        writeln!(f, "Worst: {} ms", self.current_worst)
+impl GenerationSummary {
+    pub(crate) fn print(&self, unit: &Option<String>) {
+        let unit = unit.as_deref().unwrap_or("");
+        println!("Best overall: {} {}", self.global_best.1, unit);
+        println!("Best: {} {}", self.current_best, unit);
+        println!("Worst: {} {}", self.current_worst, unit);
     }
 }
 
 impl GenerationSummary {
     pub(crate) fn new(
-        best_overall: ExecutionLog,
+        global_best: ExecutionLog,
         (current_best, current_worst): (f64, f64),
     ) -> Self {
         let timestamp = SystemTime::now()
@@ -152,7 +153,7 @@ impl GenerationSummary {
             .as_secs();
         GenerationSummary {
             timestamp,
-            best_overall,
+            global_best,
             current_best,
             current_worst,
         }
@@ -160,30 +161,38 @@ impl GenerationSummary {
 }
 
 pub(crate) fn crossover(profile: &Profile, a: &Individual, b: &Individual) -> Individual {
-    let mut parameters = BTreeMap::new();
-    for parameter in &a.parameters {
-        parameters.insert(
-            parameter.0.clone(),
-            profile
-                .0
-                .get(parameter.0)
-                .unwrap()
-                .get_genetic_space()
-                .crossover(&a.parameters[parameter.0], &b.parameters[parameter.0]),
+    let parameters = a
+        .parameters
+        .par_iter()
+        .fold(
+            || BTreeMap::new(),
+            |mut parameters, parameter| {
+                let specification = profile.0.get(parameter.0).unwrap();
+                let space = specification.get_genetic_space();
+                let value = space.crossover(&a.parameters[parameter.0], &b.parameters[parameter.0]);
+                parameters.insert(parameter.0.clone(), value);
+                parameters
+            },
+        )
+        .reduce(
+            || BTreeMap::new(),
+            |mut acc, parameters| {
+                acc.extend(parameters);
+                acc
+            },
         );
-    }
     Individual::new(parameters)
 }
 
 pub(crate) fn mutate(profile: &Profile, options: &MutationOptions, individual: &mut Individual) {
-    for (name, parameter) in &mut individual.parameters {
-        profile
-            .0
-            .get(name)
-            .unwrap()
-            .get_genetic_space()
-            .mutate(options, parameter);
-    }
+    individual
+        .parameters
+        .par_iter_mut()
+        .for_each(|(name, parameter)| {
+            let specification = profile.0.get(name).unwrap();
+            let space = specification.get_genetic_space();
+            space.mutate(options, parameter);
+        });
 }
 
 pub(crate) fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usize> {

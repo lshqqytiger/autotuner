@@ -1,9 +1,9 @@
-use std::rc::Rc;
-
 use crate::{
-    direction::Direction, heap::Heap, parameter::Individual,
-    strategies::genetic::execution_result::ExecutionResult,
+    direction::Direction,
+    parameter::Individual,
+    strategies::{genetic::execution_result::ExecutionResult, heap::Heap},
 };
+use std::rc::Rc;
 
 pub(crate) struct Ranking {
     heap: Heap<ExecutionResult>,

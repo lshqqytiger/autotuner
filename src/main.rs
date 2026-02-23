@@ -4,7 +4,6 @@ mod context;
 mod criterion;
 mod direction;
 mod execution_log;
-mod heap;
 mod helper;
 mod hook;
 mod parameter;
@@ -40,6 +39,10 @@ use tempdir::TempDir;
 /// CLI Arguments
 struct Options {
     #[argh(positional)]
+    configuration: String,
+
+    #[argh(option, default = "Vec::new()")]
+    /// path to source files
     sources: Vec<String>,
 
     #[argh(option, default = "Vec::new()")]
@@ -50,9 +53,9 @@ struct Options {
     /// path to hook files
     hook: Vec<String>,
 
-    #[argh(option, short = 'c')]
-    /// path to configuration file (required)
-    configuration: String,
+    #[argh(option, short = 'c', default = "Vec::new()")]
+    /// CPU cores to use
+    cores: Vec<usize>,
 
     #[argh(option, short = 'r', default = "15")]
     /// number of repetitions for each individual (default: 15)
@@ -91,6 +94,7 @@ impl<'a> Output<'a> {
 struct Autotuner<'a> {
     sources: &'a [String],
     configuration: Configuration,
+    cores: Option<Vec<usize>>,
     temp_dir: TempDir,
     helper: Library,
     hook: Library,
@@ -115,6 +119,7 @@ impl<'a> Autotuner<'a> {
         helper: &'a [String],
         hook: &'a [String],
         configuration: Configuration,
+        cores: &Option<Vec<usize>>,
     ) -> anyhow::Result<Self> {
         match &configuration.strategy {
             strategies::Strategy::Exhaustive(_) => {}
@@ -127,6 +132,20 @@ impl<'a> Autotuner<'a> {
                 }
             }
         }
+
+        let cores = if let Some(cores) = cores {
+            if affinity::get_thread_affinity().is_err() {
+                println!("[WARNING] Failed to get thread affinity");
+                None
+            } else {
+                if cores.is_empty() {
+                    return Err(anyhow!("At least one CPU core must be specified"));
+                }
+                Some(cores.to_vec())
+            }
+        } else {
+            None
+        };
 
         let temp_dir = TempDir::new("autotuner")?;
         fs::create_dir(temp_dir.path().join("individuals"))?;
@@ -163,6 +182,7 @@ impl<'a> Autotuner<'a> {
             helper,
             hook,
             workspace,
+            cores,
         })
     }
 
@@ -201,9 +221,13 @@ impl<'a> Autotuner<'a> {
                         println!("{}/{}: ", count, self.configuration.profile.len());
 
                         let result = self.evaluate(&individual, repetition);
-                        println!("{}", result);
+                        print!("{}", result);
+                        if let Some(unit) = &self.configuration.unit {
+                            print!(" {}", unit);
+                        }
+                        println!();
                         if verbose {
-                            println!("{}", self.configuration.profile.display(&individual));
+                            println!("{}", self.configuration.profile.stringify(&individual));
                         }
                         println!();
 
@@ -245,7 +269,7 @@ impl<'a> Autotuner<'a> {
 
                 let mut rng = rand::rng();
                 let mut temp_results = FxHashMap::default();
-                let mut previous_best = self.configuration.direction.worst();
+                let mut best_overall = self.configuration.direction.worst();
                 loop {
                     let mut evaluation_results = Vec::with_capacity(state.individuals.len());
 
@@ -266,13 +290,18 @@ impl<'a> Autotuner<'a> {
                                 print!(" {}/{}: ", index + 1, len);
 
                                 let result = self.evaluate(&state.individuals[index], repetition);
-                                println!("{}", result);
+                                print!("{}", result);
+                                if let Some(unit) = &self.configuration.unit {
+                                    print!(" {}", unit);
+                                }
+                                println!();
+
                                 if verbose {
-                                    println!(
+                                    print!(
                                         "{}",
                                         self.configuration
                                             .profile
-                                            .display(&state.individuals[index])
+                                            .stringify(&state.individuals[index])
                                     );
                                 }
                                 println!();
@@ -313,24 +342,25 @@ impl<'a> Autotuner<'a> {
                         boundaries,
                     );
                     println!("=== Generation #{} Summary ===", state.generation);
-                    println!("{}", summary);
+                    summary.print(&self.configuration.unit);
                     history.push(summary);
 
                     let (best, worst) = boundaries;
                     if self
                         .configuration
                         .direction
-                        .compare(best, previous_best)
+                        .compare(best, best_overall)
                         .is_gt()
                     {
                         state.count = 0;
-                        previous_best = best;
+                        best_overall = best;
                     } else {
                         state.count += 1;
                     }
 
                     // termination check
                     if let Some(endure) = options.terminate.endure {
+                        println!("{}/{}", state.count, endure);
                         if state.count == endure {
                             break;
                         }
@@ -408,9 +438,14 @@ impl<'a> Autotuner<'a> {
                             print!(" {}/{}: ", index + 1, options.generate);
 
                             let result = self.evaluate(&child, repetition);
-                            println!("{}", result);
+                            print!("{}", result);
+                            if let Some(unit) = &self.configuration.unit {
+                                print!(" {}", unit);
+                            }
+                            println!();
+
                             if verbose {
-                                println!("{}", self.configuration.profile.display(&child));
+                                print!("{}", self.configuration.profile.stringify(&child));
                             }
                             println!();
 
@@ -508,7 +543,15 @@ impl<'a> Autotuner<'a> {
                     println!("Segmentation fault occurred during evaluation");
                     process::exit(1);
                 });
+                let affinity = self.cores.as_ref().map(|cores| {
+                    let affinity = affinity::get_thread_affinity().unwrap();
+                    affinity::set_thread_affinity(&cores).unwrap();
+                    affinity
+                });
                 runner.call(&mut context, &self.workspace);
+                if let Some(affinity) = affinity {
+                    affinity::set_thread_affinity(&affinity).unwrap();
+                }
                 if let Ok(id) = result {
                     unregister(id);
                 }
@@ -543,7 +586,13 @@ fn main() -> anyhow::Result<()> {
     let configuration = serde_json::from_str::<Configuration>(&configuration)
         .expect("Failed to parse configuration file");
 
-    let autotuner = Autotuner::new(&args.sources, &args.helper, &args.hook, configuration)?;
+    let autotuner = Autotuner::new(
+        &args.sources,
+        &args.helper,
+        &args.hook,
+        configuration,
+        &Some(args.cores),
+    )?;
     let state = args.continue_.as_ref().map(|filename| {
         let content = fs::read_to_string(filename).expect("Failed to read checkpoint file");
         serde_json::from_str::<Checkpoint>(&content).expect("Failed to parse checkpoint file")

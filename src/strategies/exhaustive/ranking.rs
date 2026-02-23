@@ -1,6 +1,7 @@
 use crate::{
-    direction::Direction, heap::Heap, parameter::Individual,
-    strategies::exhaustive::execution_result::ExecutionResult,
+    direction::Direction,
+    parameter::Individual,
+    strategies::{exhaustive::execution_result::ExecutionResult, heap::Heap},
 };
 
 pub(crate) struct Ranking {

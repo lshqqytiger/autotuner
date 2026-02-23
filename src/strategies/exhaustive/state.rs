@@ -1,12 +1,12 @@
 use crate::parameter::{Individual, Specification, Value};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, rc::Rc, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct State {
     pub(crate) names: Vec<Arc<str>>,
     pub(crate) values: Vec<Value>,
-    pub(crate) specifications: Vec<Rc<Specification>>,
+    pub(crate) specifications: Vec<Arc<Specification>>,
     pub(crate) done: bool,
 }
 
