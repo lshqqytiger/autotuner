@@ -297,7 +297,7 @@ impl<'a> Autotuner<'a> {
                                 println!();
 
                                 if verbose {
-                                    print!(
+                                    println!(
                                         "{}",
                                         self.configuration
                                             .profile
@@ -360,7 +360,7 @@ impl<'a> Autotuner<'a> {
 
                     // termination check
                     if let Some(endure) = options.terminate.endure {
-                        println!("{}/{}", state.count, endure);
+                        print!("{}/{}\n\n", state.count, endure);
                         if state.count == endure {
                             break;
                         }
@@ -445,7 +445,7 @@ impl<'a> Autotuner<'a> {
                             println!();
 
                             if verbose {
-                                print!("{}", self.configuration.profile.stringify(&child));
+                                println!("{}", self.configuration.profile.stringify(&child));
                             }
                             println!();
 
