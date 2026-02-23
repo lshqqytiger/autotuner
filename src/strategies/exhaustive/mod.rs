@@ -1,6 +1,6 @@
 pub(crate) mod execution_result;
 pub(crate) mod options;
-pub(crate) mod ranking;
+pub(crate) mod output;
 pub(crate) mod state;
 
 use crate::{

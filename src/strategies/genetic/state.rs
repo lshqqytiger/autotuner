@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 pub(crate) struct State {
     pub(crate) generation: usize,
     pub(crate) count: usize,
-    pub(crate) individuals: Vec<Rc<Individual>>,
+    pub(crate) population: Vec<Rc<Individual>>,
 }
 
 impl State {
@@ -28,11 +28,11 @@ impl State {
         State {
             generation: 1,
             count: 0,
-            individuals,
+            population: individuals,
         }
     }
 
     pub(crate) fn regenerate(&mut self, profile: &Profile, index: usize) {
-        self.individuals[index] = Self::sample(profile);
+        self.population[index] = Self::sample(profile);
     }
 }

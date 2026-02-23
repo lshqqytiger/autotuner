@@ -1,6 +1,6 @@
 use crate::{
-    execution_log::{ExecutionLog, IntoLogs},
     parameter::{Individual, Profile},
+    strategies::execution_log::ExecutionLog,
 };
 use std::{cmp, rc::Rc};
 
@@ -30,11 +30,5 @@ impl Ord for ExecutionResult {
 impl ExecutionResult {
     pub(crate) fn log(&self, profile: &Profile) -> ExecutionLog {
         ExecutionLog(profile.stringify(&self.0), self.1)
-    }
-}
-
-impl IntoLogs for Vec<ExecutionResult> {
-    fn into_logs(self, profile: &Profile) -> Vec<ExecutionLog> {
-        self.into_iter().map(|result| result.log(profile)).collect()
     }
 }

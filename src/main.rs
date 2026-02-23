@@ -3,7 +3,6 @@ mod configuration;
 mod context;
 mod criterion;
 mod direction;
-mod execution_log;
 mod helper;
 mod hook;
 mod parameter;
@@ -16,12 +15,11 @@ use crate::{
     configuration::Configuration,
     context::Context,
     direction::{Direction, Sort},
-    execution_log::IntoLogs,
     helper::Helper,
     hook::Hook,
     parameter::Individual,
     runner::Runner,
-    strategies::{exhaustive::Exhaustive, Checkpoint},
+    strategies::{exhaustive::Exhaustive, options::Step, Checkpoint},
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
@@ -30,9 +28,8 @@ use fxhash::FxHashMap;
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::Library;
 use rand::seq::SliceRandom;
-use serde::Serialize;
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, hint, io, process, rc::Rc, time::SystemTime};
+use std::{fs, hint, process, rc::Rc, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -69,26 +66,13 @@ struct Options {
     /// path to checkpoint file
     continue_: Option<String>,
 
-    #[argh(option, default = "\"results.json\".to_string()")]
-    /// output file (default: results.json)
+    #[argh(option, default = "\"result.json\".to_string()")]
+    /// output file (default: result.json)
     output: String,
 
     #[argh(switch, short = 'v')]
     /// verbose output
     verbose: bool,
-}
-
-struct Output<'a>(&'a String, String);
-
-impl<'a> Output<'a> {
-    fn new<T: Serialize>(path: &'a String, object: T) -> serde_json::Result<Self> {
-        let value = serde_json::to_string_pretty(&object)?;
-        Ok(Output(path, value))
-    }
-
-    fn save(self) -> io::Result<()> {
-        fs::write(self.0, self.1)
-    }
 }
 
 struct Autotuner<'a> {
@@ -127,7 +111,7 @@ impl<'a> Autotuner<'a> {
                 if options.initial <= 1 {
                     return Err(anyhow!("Initial population size must be greater than 1"));
                 }
-                if options.generate == 0 {
+                if options.generate.value == 0 {
                     return Err(anyhow!("Number of each generation must be greater than 0"));
                 }
             }
@@ -192,8 +176,7 @@ impl<'a> Autotuner<'a> {
         candidates: usize,
         checkpoint: Option<Checkpoint>,
         verbose: bool,
-        path: &'a String,
-    ) -> Union<Vec<Output<'a>>, Checkpoint> {
+    ) -> Union<serde_json::Value, Checkpoint> {
         let is_canceled = ManuallyMove::new(false);
         let sigquit_handler = unsafe {
             let is_canceled = is_canceled.clone();
@@ -205,7 +188,7 @@ impl<'a> Autotuner<'a> {
 
         let output = match &self.configuration.strategy {
             strategies::Strategy::Exhaustive(_) => {
-                let mut ranking = strategies::exhaustive::ranking::Ranking::new(
+                let mut ranking = strategies::exhaustive::output::Ranking::new(
                     &self.configuration.direction,
                     candidates,
                 );
@@ -244,16 +227,12 @@ impl<'a> Autotuner<'a> {
                 if *is_canceled {
                     second!(state.into())
                 } else {
-                    let mut output = ranking.to_vec();
-                    output.reverse();
-                    let output = output.into_logs(&self.configuration.profile);
-                    first!(vec![
-                        Output::new(path, output).expect("Failed to serialize object"),
-                    ])
+                    first!(ranking.into_json(&self.configuration.profile))
                 }
             }
             strategies::Strategy::Genetic(options) => {
-                let mut ranking = strategies::genetic::ranking::Ranking::new(
+                let mut options = options.clone();
+                let mut output = strategies::genetic::output::Output::new(
                     &self.configuration.direction,
                     candidates,
                 );
@@ -265,7 +244,6 @@ impl<'a> Autotuner<'a> {
                         options.initial,
                     )
                 };
-                let mut history = Vec::new();
 
                 let mut rng = rand::rng();
                 let mut temp_results = FxHashMap::default();
@@ -273,10 +251,10 @@ impl<'a> Autotuner<'a> {
                 // so wrap this call with black_box to prevent optimization
                 let mut best_overall = hint::black_box(self.configuration.direction.worst());
                 loop {
-                    let mut evaluation_results = Vec::with_capacity(state.individuals.len());
+                    let mut evaluation_results = Vec::with_capacity(state.population.len());
 
                     // evaluate individuals
-                    let len = state.individuals.len();
+                    let len = state.population.len();
                     let mut index = 0;
                     while index < len {
                         guard!(SIGQUIT, {
@@ -291,10 +269,12 @@ impl<'a> Autotuner<'a> {
                                 }
                                 print!(" {}/{}: ", index + 1, len);
 
-                                let result = self.evaluate(&state.individuals[index], repetition);
+                                let result = self.evaluate(&state.population[index], repetition);
                                 print!("{}", result);
-                                if let Some(unit) = &self.configuration.unit {
-                                    print!(" {}", unit);
+                                if result.is_finite() {
+                                    if let Some(unit) = &self.configuration.unit {
+                                        print!(" {}", unit);
+                                    }
                                 }
                                 println!();
 
@@ -303,7 +283,7 @@ impl<'a> Autotuner<'a> {
                                         "{}",
                                         self.configuration
                                             .profile
-                                            .stringify(&state.individuals[index])
+                                            .stringify(&state.population[index])
                                     );
                                 }
                                 println!();
@@ -315,7 +295,7 @@ impl<'a> Autotuner<'a> {
                                 state.regenerate(&self.configuration.profile, index);
                                 continue;
                             } else {
-                                ranking.push(state.individuals[index].clone(), result);
+                                output.ranking.push(state.population[index].clone(), result);
                                 evaluation_results.push((result, index));
                                 index += 1;
                             }
@@ -337,7 +317,8 @@ impl<'a> Autotuner<'a> {
                         .filter(|x| x.is_finite());
                     let boundaries = self.configuration.direction.boundaries(iter);
                     let summary = strategies::genetic::GenerationSummary::new(
-                        ranking
+                        output
+                            .ranking
                             .best()
                             .map(|x| x.log(&self.configuration.profile))
                             .unwrap(),
@@ -345,7 +326,7 @@ impl<'a> Autotuner<'a> {
                     );
                     println!("=== Generation #{} Summary ===", state.generation);
                     summary.print(&self.configuration.unit);
-                    history.push(summary);
+                    output.history.push(summary);
 
                     let (best, worst) = boundaries;
                     if self
@@ -391,9 +372,9 @@ impl<'a> Autotuner<'a> {
                     self.configuration.direction.sort(&mut inverted);
                     inverted.truncate(inverted.len() - options.remain);
                     inverted.shuffle(&mut rng);
-                    let holes = strategies::genetic::stochastic_universal_sampling(
+                    let mut holes = strategies::genetic::stochastic_universal_sampling(
                         &inverted,
-                        options.generate,
+                        options.delete.value,
                     );
                     drop(inverted);
 
@@ -411,18 +392,18 @@ impl<'a> Autotuner<'a> {
                     evaluation_results.shuffle(&mut rng);
 
                     // generate & evaluate children
-                    let mut children = Vec::with_capacity(options.generate);
+                    let mut children = Vec::with_capacity(options.generate.value);
                     temp_results.clear();
                     let mut index = 0;
-                    while index < options.generate {
+                    while index < options.generate.value {
                         let result = strategies::genetic::stochastic_universal_sampling(
                             &evaluation_results,
                             2,
                         );
                         let mut child = strategies::genetic::crossover(
                             &self.configuration.profile,
-                            &state.individuals[result[0]],
-                            &state.individuals[result[1]],
+                            &state.population[result[0]],
+                            &state.population[result[1]],
                         );
                         strategies::genetic::mutate(
                             &self.configuration.profile,
@@ -437,12 +418,14 @@ impl<'a> Autotuner<'a> {
                             } else {
                                 print!(";");
                             }
-                            print!(" {}/{}: ", index + 1, options.generate);
+                            print!(" {}/{}: ", index + 1, options.generate.value);
 
                             let result = self.evaluate(&child, repetition);
                             print!("{}", result);
-                            if let Some(unit) = &self.configuration.unit {
-                                print!(" {}", unit);
+                            if result.is_finite() {
+                                if let Some(unit) = &self.configuration.unit {
+                                    print!(" {}", unit);
+                                }
                             }
                             println!();
 
@@ -464,24 +447,31 @@ impl<'a> Autotuner<'a> {
                     }
 
                     // replace individuals with children
-                    for (index, individual) in children.into_iter().enumerate() {
-                        state.individuals[holes[index]] = Rc::new(individual);
+                    let min = options.generate.value.min(options.delete.value);
+                    let generated = children.split_off(min);
+                    let deleted = holes.split_off(min);
+                    assert!(!generated.is_empty() && !deleted.is_empty());
+                    for (index, child) in children.into_iter().enumerate() {
+                        state.population[holes[index]] = Rc::new(child);
                     }
+                    if !generated.is_empty() {
+                        for child in generated.into_iter() {
+                            state.population.push(Rc::new(child));
+                        }
+                    }
+                    if !deleted.is_empty() {
+                        for index in deleted {
+                            state.population.remove(index);
+                        }
+                    }
+
+                    options.step();
                 }
 
                 if *is_canceled {
                     second!(state.into())
                 } else {
-                    let mut output = ranking.to_vec();
-                    output.reverse();
-                    let output = output.into_logs(&self.configuration.profile);
-                    let mut outputs =
-                        vec![Output::new(path, output).expect("Failed to serialize object")];
-                    if let Some(path) = &options.history {
-                        outputs
-                            .push(Output::new(path, history).expect("Failed to serialize object"));
-                    }
-                    first!(outputs)
+                    first!(output.into_json(&self.configuration.profile))
                 }
             }
         };
@@ -605,12 +595,13 @@ fn main() -> anyhow::Result<()> {
             args.candidates,
             state,
             args.verbose,
-            &args.output,
         );
         output => {
-            for output in output {
-                output.save().expect("Failed to write output file");
-            }
+            fs::write(
+                &args.output,
+                serde_json::to_string_pretty(&output).expect("Failed to serialize output"),
+            )
+            .expect("Failed to write results to file");
         },
         checkpoint => {
             let filename = format!(

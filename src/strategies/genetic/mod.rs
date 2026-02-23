@@ -1,13 +1,13 @@
 pub(crate) mod execution_result;
 pub(crate) mod options;
-pub(crate) mod ranking;
+pub(crate) mod output;
 pub(crate) mod state;
 
-use crate::execution_log::ExecutionLog;
 use crate::parameter::{
     Individual, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
 };
-use crate::strategies::genetic::options::MutationOptions;
+use crate::strategies::execution_log::ExecutionLog;
+use crate::strategies::genetic::options::Mutation;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -32,7 +32,7 @@ impl Genetic for Specification {
 
 trait GeneticSpace {
     fn crossover(&self, a: &Value, b: &Value) -> Value;
-    fn mutate(&self, options: &MutationOptions, value: &mut Value);
+    fn mutate(&self, options: &Mutation, value: &mut Value);
 }
 
 impl GeneticSpace for IntegerSpace {
@@ -52,13 +52,13 @@ impl GeneticSpace for IntegerSpace {
         }
     }
 
-    fn mutate(&self, options: &MutationOptions, code: &mut Value) {
-        if !rand::random_bool(options.probability) {
+    fn mutate(&self, options: &Mutation, code: &mut Value) {
+        if !rand::random_bool(options.probability.value) {
             return;
         }
         match (self, code) {
             (IntegerSpace::Sequence(start, end), Value::Integer(n)) => {
-                let mut variation = ((end - start) as f64 * options.variation) as i32;
+                let mut variation = ((end - start) as f64 * options.variation.value) as i32;
                 if variation == 0 {
                     variation = 1;
                 }
@@ -93,8 +93,8 @@ impl GeneticSpace for SwitchSpace {
         }
     }
 
-    fn mutate(&self, options: &MutationOptions, code: &mut Value) {
-        if !rand::random_bool(options.probability) {
+    fn mutate(&self, options: &Mutation, code: &mut Value) {
+        if !rand::random_bool(options.probability.value) {
             return;
         }
 
@@ -118,8 +118,8 @@ impl GeneticSpace for KeywordSpace {
         }
     }
 
-    fn mutate(&self, options: &MutationOptions, code: &mut Value) {
-        if rand::random_bool(options.probability) {
+    fn mutate(&self, options: &Mutation, code: &mut Value) {
+        if rand::random_bool(options.probability.value) {
             *code = self.random();
         }
     }
@@ -184,7 +184,7 @@ pub(crate) fn crossover(profile: &Profile, a: &Individual, b: &Individual) -> In
     Individual::new(parameters)
 }
 
-pub(crate) fn mutate(profile: &Profile, options: &MutationOptions, individual: &mut Individual) {
+pub(crate) fn mutate(profile: &Profile, options: &Mutation, individual: &mut Individual) {
     individual
         .parameters
         .par_iter_mut()

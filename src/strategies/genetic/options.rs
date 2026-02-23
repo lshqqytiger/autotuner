@@ -1,3 +1,4 @@
+use crate::strategies::options::{self, Step};
 use serde::{Deserialize, Serialize};
 
 fn default_initial() -> usize {
@@ -5,45 +6,64 @@ fn default_initial() -> usize {
 }
 
 fn default_remain() -> usize {
-    4
+    0
 }
 
-fn default_generate() -> usize {
-    96
+fn default_generate() -> options::Usize {
+    64.into()
 }
 
-#[derive(Serialize, Deserialize)]
-pub(crate) struct GeneticSearchOptions {
+fn default_delete() -> options::Usize {
+    64.into()
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct Options {
     #[serde(default = "default_initial")]
     pub(crate) initial: usize,
     #[serde(default = "default_remain")]
     pub(crate) remain: usize,
     #[serde(default = "default_generate")]
-    pub(crate) generate: usize,
-    pub(crate) terminate: TerminationOptions,
-    pub(crate) mutate: MutationOptions,
+    pub(crate) generate: options::Usize,
+    #[serde(default = "default_delete")]
+    pub(crate) delete: options::Usize,
+    pub(crate) terminate: Termination,
+    pub(crate) mutate: Mutation,
     #[serde(default)]
     pub(crate) history: Option<String>,
 }
 
-fn default_mutation_probability() -> f64 {
-    0.1
+impl Step for Options {
+    fn step(&mut self) {
+        self.mutate.step();
+    }
 }
 
-fn default_mutation_variation() -> f64 {
-    0.1
+fn default_mutation_probability() -> options::Real {
+    0.1.into()
 }
 
-#[derive(Serialize, Deserialize)]
-pub(crate) struct MutationOptions {
+fn default_mutation_variation() -> options::Real {
+    0.1.into()
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct Mutation {
     #[serde(default = "default_mutation_probability")]
-    pub(crate) probability: f64,
+    pub(crate) probability: options::Real,
     #[serde(default = "default_mutation_variation")]
-    pub(crate) variation: f64,
+    pub(crate) variation: options::Real,
 }
 
-#[derive(Serialize, Deserialize)]
-pub(crate) struct TerminationOptions {
+impl Step for Mutation {
+    fn step(&mut self) {
+        self.probability.step();
+        self.variation.step();
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct Termination {
     #[serde(default)]
     pub(crate) limit: Option<usize>,
     #[serde(default)]
