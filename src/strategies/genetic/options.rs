@@ -17,6 +17,10 @@ fn default_delete() -> options::Usize {
     64.into()
 }
 
+fn default_infuse() -> options::Usize {
+    0.into()
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct Options {
     #[serde(default = "default_initial")]
@@ -27,6 +31,8 @@ pub(crate) struct Options {
     pub(crate) generate: options::Usize,
     #[serde(default = "default_delete")]
     pub(crate) delete: options::Usize,
+    #[serde(default = "default_infuse")]
+    pub(crate) infuse: options::Usize,
     pub(crate) terminate: Termination,
     pub(crate) mutate: Mutation,
     #[serde(default)]
@@ -35,6 +41,9 @@ pub(crate) struct Options {
 
 impl Step for Options {
     fn step(&mut self) {
+        self.generate.step();
+        self.delete.step();
+        self.infuse.step();
         self.mutate.step();
     }
 }

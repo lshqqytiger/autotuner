@@ -10,7 +10,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    fn sample(profile: &Profile) -> Rc<Individual> {
+    pub(crate) fn sample(profile: &Profile) -> Rc<Individual> {
         Rc::new(Individual::new(
             profile
                 .0
@@ -30,9 +30,5 @@ impl State {
             count: 0,
             population: individuals,
         }
-    }
-
-    pub(crate) fn regenerate(&mut self, profile: &Profile, index: usize) {
-        self.population[index] = Self::sample(profile);
     }
 }

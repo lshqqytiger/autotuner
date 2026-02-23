@@ -34,6 +34,7 @@ impl From<f64> for Real {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) enum Scaler {
+    Linear(f64),
     Exponential(f64),
 }
 
@@ -44,6 +45,9 @@ pub(crate) trait Step {
 impl Step for Usize {
     fn step(&mut self) {
         match self.scaler {
+            Some(Scaler::Linear(factor)) => {
+                self.value = ((self.value as f64) + factor) as usize;
+            }
             Some(Scaler::Exponential(factor)) => {
                 self.value = ((self.value as f64) * factor) as usize;
             }
@@ -55,6 +59,9 @@ impl Step for Usize {
 impl Step for Real {
     fn step(&mut self) {
         match self.scaler {
+            Some(Scaler::Linear(factor)) => {
+                self.value += factor;
+            }
             Some(Scaler::Exponential(factor)) => {
                 self.value *= factor;
             }

@@ -292,7 +292,9 @@ impl<'a> Autotuner<'a> {
                             };
 
                             if state.generation == 1 && result.is_infinite() {
-                                state.regenerate(&self.configuration.profile, index);
+                                state.population[index] = strategies::genetic::state::State::sample(
+                                    &self.configuration.profile,
+                                );
                                 continue;
                             } else {
                                 output.ranking.push(state.population[index].clone(), result);
@@ -463,6 +465,14 @@ impl<'a> Autotuner<'a> {
                         for index in deleted {
                             state.population.remove(index);
                         }
+                    }
+
+                    for _ in 0..options.infuse.value {
+                        state
+                            .population
+                            .push(strategies::genetic::state::State::sample(
+                                &self.configuration.profile,
+                            ));
                     }
 
                     options.step();
