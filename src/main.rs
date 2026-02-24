@@ -345,7 +345,7 @@ impl<'a> Autotuner<'a> {
 
                     // termination check
                     if let Some(endure) = options.terminate.endure {
-                        print!("{}/{}\n\n", state.count, endure);
+                        print!("{}/{}\n", state.count, endure);
                         if state.count == endure {
                             break;
                         }
@@ -357,6 +357,8 @@ impl<'a> Autotuner<'a> {
                             break;
                         }
                     }
+
+                    println!();
 
                     // select individuals to remove
                     let mut inverted = evaluation_results.clone();

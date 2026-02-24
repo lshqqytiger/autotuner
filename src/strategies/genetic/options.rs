@@ -50,7 +50,7 @@ impl Step for Options {
 #[derive(Deserialize, Default, Clone)]
 pub(crate) struct Mutation {
     #[serde(default)]
-    pub(crate) integer: Option<IntegerMutation>,
+    pub(crate) integer: Vec<IntegerMutation>,
     #[serde(default)]
     pub(crate) switch: Option<SwitchMutation>,
     #[serde(default)]
@@ -91,7 +91,7 @@ pub(crate) struct KeywordMutation {
 
 impl Step for Mutation {
     fn step(&mut self) {
-        if let Some(integer) = &mut self.integer {
+        for integer in &mut self.integer {
             integer.probability.step();
             if let Some(variation) = &mut integer.variation {
                 variation.step();

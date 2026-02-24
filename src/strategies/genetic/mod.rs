@@ -32,7 +32,7 @@ impl Genetic for Specification {
 
 trait GeneticSpace {
     fn crossover(&self, a: &Value, b: &Value) -> Value;
-    fn mutate(&self, options: &Mutation, value: &mut Value);
+    fn mutate(&self, mutations: &Mutation, value: &mut Value);
 }
 
 impl GeneticSpace for IntegerSpace {
@@ -52,34 +52,34 @@ impl GeneticSpace for IntegerSpace {
         }
     }
 
-    fn mutate(&self, options: &Mutation, code: &mut Value) {
-        if let Some(options) = &options.integer {
-            if !rand::random_bool(options.probability.value) {
-                return;
-            }
-            if let Some(variation) = &options.variation {
-                match (self, code) {
-                    (IntegerSpace::Sequence(start, end), Value::Integer(n)) => {
-                        let mut variation = ((end - start) as f64 * variation.value) as i32;
-                        if variation == 0 {
-                            variation = 1;
-                        }
+    fn mutate(&self, mutations: &Mutation, code: &mut Value) {
+        for mutation in &mutations.integer {
+            if rand::random_bool(mutation.probability.value) {
+                if let Some(variation) = &mutation.variation {
+                    match (self, code) {
+                        (IntegerSpace::Sequence(start, end), Value::Integer(n)) => {
+                            let mut variation = ((end - start) as f64 * variation.value) as i32;
+                            if variation == 0 {
+                                variation = 1;
+                            }
 
-                        *n += rand::random_range(-variation..=variation);
+                            *n += rand::random_range(-variation..=variation);
 
-                        if *n < *start {
-                            *n = *start;
-                        } else if *n > *end {
-                            *n = *end;
+                            if *n < *start {
+                                *n = *start;
+                            } else if *n > *end {
+                                *n = *end;
+                            }
                         }
+                        (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
+                            *i = rand::random_range(0..candidates.len());
+                        }
+                        _ => unreachable!(),
                     }
-                    (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
-                        *i = rand::random_range(0..candidates.len());
-                    }
-                    _ => unreachable!(),
+                } else {
+                    *code = self.random();
                 }
-            } else {
-                *code = self.random();
+                return;
             }
         }
     }
@@ -99,8 +99,8 @@ impl GeneticSpace for SwitchSpace {
         }
     }
 
-    fn mutate(&self, options: &Mutation, code: &mut Value) {
-        if let Some(options) = &options.switch {
+    fn mutate(&self, mutations: &Mutation, code: &mut Value) {
+        if let Some(options) = &mutations.switch {
             if !rand::random_bool(options.probability.value) {
                 return;
             }
@@ -126,8 +126,8 @@ impl GeneticSpace for KeywordSpace {
         }
     }
 
-    fn mutate(&self, options: &Mutation, code: &mut Value) {
-        if let Some(options) = &options.keyword {
+    fn mutate(&self, mutations: &Mutation, code: &mut Value) {
+        if let Some(options) = &mutations.keyword {
             if rand::random_bool(options.probability.value) {
                 *code = self.random();
             }
