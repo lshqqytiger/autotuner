@@ -8,7 +8,7 @@ pub(crate) mod options;
 mod execution_log;
 mod heap;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub(crate) enum Strategy {
     Exhaustive(exhaustive::options::Options),
     Genetic(genetic::options::Options),

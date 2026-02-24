@@ -202,7 +202,7 @@ impl ToString for Value {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub(crate) struct Profile(pub(crate) BTreeMap<Arc<str>, Arc<Specification>>);
 
 impl Profile {

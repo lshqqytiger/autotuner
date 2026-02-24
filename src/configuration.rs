@@ -2,9 +2,9 @@ use crate::{
     criterion::Criterion, direction::Direction, helper, hook, parameter::Profile,
     strategies::Strategy,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub(crate) struct Configuration {
     #[serde(default)]
     pub(crate) unit: Option<String>,

@@ -1,5 +1,5 @@
 use crate::strategies::options::{self, Step};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 fn default_initial() -> usize {
     128
@@ -21,7 +21,7 @@ fn default_infuse() -> options::Usize {
     0.into()
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 pub(crate) struct Options {
     #[serde(default = "default_initial")]
     pub(crate) initial: usize,
@@ -34,9 +34,8 @@ pub(crate) struct Options {
     #[serde(default = "default_infuse")]
     pub(crate) infuse: options::Usize,
     pub(crate) terminate: Termination,
-    pub(crate) mutate: Mutation,
     #[serde(default)]
-    pub(crate) history: Option<String>,
+    pub(crate) mutate: Mutation,
 }
 
 impl Step for Options {
@@ -48,30 +47,66 @@ impl Step for Options {
     }
 }
 
-fn default_mutation_probability() -> options::Real {
-    0.1.into()
-}
-
-fn default_mutation_variation() -> options::Real {
-    0.1.into()
-}
-
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Deserialize, Default, Clone)]
 pub(crate) struct Mutation {
-    #[serde(default = "default_mutation_probability")]
+    #[serde(default)]
+    pub(crate) integer: Option<IntegerMutation>,
+    #[serde(default)]
+    pub(crate) switch: Option<SwitchMutation>,
+    #[serde(default)]
+    pub(crate) keyword: Option<KeywordMutation>,
+}
+
+fn default_integer_mutation_probability() -> options::Real {
+    0.1.into()
+}
+
+#[derive(Deserialize, Clone)]
+pub(crate) struct IntegerMutation {
+    #[serde(default = "default_integer_mutation_probability")]
     pub(crate) probability: options::Real,
-    #[serde(default = "default_mutation_variation")]
-    pub(crate) variation: options::Real,
+    #[serde(default)]
+    pub(crate) variation: Option<options::Real>,
+}
+
+fn default_switch_mutation_probability() -> options::Real {
+    0.1.into()
+}
+
+#[derive(Deserialize, Clone)]
+pub(crate) struct SwitchMutation {
+    #[serde(default = "default_switch_mutation_probability")]
+    pub(crate) probability: options::Real,
+}
+
+fn default_keyword_mutation_probability() -> options::Real {
+    0.1.into()
+}
+
+#[derive(Deserialize, Clone)]
+pub(crate) struct KeywordMutation {
+    #[serde(default = "default_keyword_mutation_probability")]
+    pub(crate) probability: options::Real,
 }
 
 impl Step for Mutation {
     fn step(&mut self) {
-        self.probability.step();
-        self.variation.step();
+        if let Some(integer) = &mut self.integer {
+            integer.probability.step();
+            if let Some(variation) = &mut integer.variation {
+                variation.step();
+            }
+        }
+        if let Some(switch) = &mut self.switch {
+            switch.probability.step();
+        }
+        if let Some(keyword) = &mut self.keyword {
+            keyword.probability.step();
+        }
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 pub(crate) struct Termination {
     #[serde(default)]
     pub(crate) limit: Option<usize>,
