@@ -441,7 +441,14 @@ impl<'a> Autotuner<'a> {
                                 continue;
                             }
 
-                            temp_results.insert(holes[index], result);
+                            temp_results.insert(
+                                if index < options.delete.value {
+                                    holes[index]
+                                } else {
+                                    index
+                                },
+                                result,
+                            );
                         });
 
                         children.push(child);
@@ -452,7 +459,7 @@ impl<'a> Autotuner<'a> {
                     let min = options.generate.value.min(options.delete.value);
                     let generated = children.split_off(min);
                     let deleted = holes.split_off(min);
-                    assert!(!generated.is_empty() && !deleted.is_empty());
+                    assert!(generated.is_empty() || deleted.is_empty());
                     for (index, child) in children.into_iter().enumerate() {
                         state.population[holes[index]] = Rc::new(child);
                     }
