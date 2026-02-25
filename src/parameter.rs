@@ -206,61 +206,6 @@ impl ToString for Value {
 pub(crate) struct Profile(pub(crate) BTreeMap<Arc<str>, Arc<Specification>>);
 
 impl Profile {
-    pub(crate) fn compiler_arguments(&self, individual: &Individual) -> Vec<String> {
-        let mut arguments = Vec::new();
-        for (name, value) in &individual.parameters {
-            match (self.0.get(name).unwrap().as_ref(), value) {
-                (
-                    Specification::Integer {
-                        transformer: Some(transformer),
-                        space: IntegerSpace::Sequence(_, _),
-                    },
-                    Value::Integer(x),
-                ) => {
-                    arguments.push(format!("-D{}=({})", name, transformer.apply(x)));
-                }
-                (
-                    Specification::Integer {
-                        transformer: None,
-                        space: IntegerSpace::Sequence(_, _),
-                    },
-                    Value::Integer(x),
-                ) => {
-                    arguments.push(format!("-D{}={}", name, x));
-                }
-                (
-                    Specification::Integer {
-                        transformer: Some(_),
-                        space: IntegerSpace::Candidates(_),
-                    },
-                    Value::Index(_),
-                ) => unimplemented!(),
-                (
-                    Specification::Integer {
-                        transformer: None,
-                        space: IntegerSpace::Candidates(candidates),
-                    },
-                    Value::Index(i),
-                ) => {
-                    arguments.push(format!("-D{}={}", name, candidates[*i]));
-                }
-
-                (Specification::Switch, Value::Switch(x)) => {
-                    if *x {
-                        arguments.push(format!("-D{}", name));
-                    }
-                }
-
-                (Specification::Keyword(KeywordSpace(options)), Value::Index(i)) => {
-                    arguments.push(format!("-D{}={}", name, options[*i]));
-                }
-
-                _ => unreachable!(),
-            }
-        }
-        arguments
-    }
-
     pub(crate) fn stringify(&self, individual: &Individual) -> String {
         individual
             .parameters

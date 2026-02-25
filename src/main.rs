@@ -533,13 +533,7 @@ impl<'a> Autotuner<'a> {
                 self.sources
                     .iter()
                     .chain(self.configuration.compiler_arguments.iter())
-                    .chain(context.arguments.iter())
-                    .chain(
-                        self.configuration
-                            .profile
-                            .compiler_arguments(&individual)
-                            .iter(),
-                    ),
+                    .chain(context.arguments.iter()),
             )
             .unwrap();
         }
