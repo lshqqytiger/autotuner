@@ -49,7 +49,9 @@ impl<'a> Hook<'a> {
 enum Interface {
     TempDir = 0x00,
 
-    ParameterGetInt = 0x10,
+    ParameterGetInteger = 0x10,
+    ParameterGetSwitch = 0x11,
+    ParameterGetKeyword = 0x12,
 
     WorkspaceGetPtr = 0x20,
 
@@ -64,7 +66,15 @@ impl TryFrom<ffi::c_int> for Interface {
     fn try_from(value: ffi::c_int) -> Result<Self, Self::Error> {
         match value {
             x if x == Interface::TempDir as ffi::c_int => Ok(Interface::TempDir),
-            x if x == Interface::ParameterGetInt as ffi::c_int => Ok(Interface::ParameterGetInt),
+            x if x == Interface::ParameterGetInteger as ffi::c_int => {
+                Ok(Interface::ParameterGetInteger)
+            }
+            x if x == Interface::ParameterGetSwitch as ffi::c_int => {
+                Ok(Interface::ParameterGetSwitch)
+            }
+            x if x == Interface::ParameterGetKeyword as ffi::c_int => {
+                Ok(Interface::ParameterGetKeyword)
+            }
             x if x == Interface::WorkspaceGetPtr as ffi::c_int => Ok(Interface::WorkspaceGetPtr),
             x if x == Interface::AppendArgument as ffi::c_int => Ok(Interface::AppendArgument),
             x if x == Interface::Invalidate as ffi::c_int => Ok(Interface::Invalidate),
@@ -76,7 +86,9 @@ impl TryFrom<ffi::c_int> for Interface {
 extern "C" fn get(id: ffi::c_int) -> *const ffi::c_void {
     match Interface::try_from(id) {
         Ok(Interface::TempDir) => temp_dir as *const ffi::c_void,
-        Ok(Interface::ParameterGetInt) => parameter_get_int as *const ffi::c_void,
+        Ok(Interface::ParameterGetInteger) => parameter_get_integer as *const ffi::c_void,
+        Ok(Interface::ParameterGetSwitch) => parameter_get_switch as *const ffi::c_void,
+        Ok(Interface::ParameterGetKeyword) => parameter_get_keyword as *const ffi::c_void,
         Ok(Interface::WorkspaceGetPtr) => workspace_get_ptr as *const ffi::c_void,
         Ok(Interface::AppendArgument) => append_argument as *const ffi::c_void,
         Ok(Interface::Invalidate) => invalidate as *const ffi::c_void,
@@ -97,27 +109,33 @@ extern "C" fn temp_dir(ctx: *mut Context, ptr: *mut ffi::c_char, size: usize) {
     }
 }
 
-extern "C" fn parameter_get_int(ctx: *mut Context, name: *const ffi::c_char) -> *const ffi::c_int {
+fn get_parameter<'a>(
+    ctx: &'a Context,
+    name: *const ffi::c_char,
+) -> Option<(&'a Specification, &'a Value)> {
+    let name = unsafe { ffi::CStr::from_ptr(name) }
+        .to_string_lossy()
+        .intern();
+    let specification = ctx.profile.0.get(&name)?;
+    let value = ctx.individual.parameters.get(&name)?;
+    Some((specification, value))
+}
+
+extern "C" fn parameter_get_integer(
+    ctx: *mut Context,
+    name: *const ffi::c_char,
+) -> *const ffi::c_int {
     let ctx = if let Some(ctx) = unsafe { ctx.as_ref() } {
         ctx
     } else {
         return ptr::null();
     };
-    let name = unsafe { ffi::CStr::from_ptr(name) }
-        .to_string_lossy()
-        .into_owned()
-        .intern();
-    let specification: &Specification = if let Some(specification) = ctx.profile.0.get(&name) {
-        specification
+    let parameter = if let Some(parameter) = get_parameter(ctx, name) {
+        parameter
     } else {
         return ptr::null();
     };
-    let value = if let Some(value) = ctx.individual.parameters.get(&name) {
-        value
-    } else {
-        return ptr::null();
-    };
-    match (specification, value) {
+    match parameter {
         (
             Specification::Integer {
                 transformer: _,
@@ -132,6 +150,57 @@ extern "C" fn parameter_get_int(ctx: *mut Context, name: *const ffi::c_char) -> 
             },
             Value::Index(i),
         ) => &candidates[*i] as *const ffi::c_int,
+        _ => ptr::null(),
+    }
+}
+
+static SWITCH_TRUE: ffi::c_int = 1;
+static SWITCH_FALSE: ffi::c_int = 0;
+
+extern "C" fn parameter_get_switch(
+    ctx: *mut Context,
+    name: *const ffi::c_char,
+) -> *const ffi::c_int {
+    let ctx = if let Some(ctx) = unsafe { ctx.as_ref() } {
+        ctx
+    } else {
+        return ptr::null();
+    };
+    let parameter = if let Some(parameter) = get_parameter(ctx, name) {
+        parameter
+    } else {
+        return ptr::null();
+    };
+    match parameter {
+        (Specification::Switch, Value::Switch(v)) => {
+            if *v {
+                &raw const SWITCH_TRUE
+            } else {
+                &raw const SWITCH_FALSE
+            }
+        }
+        _ => ptr::null(),
+    }
+}
+
+extern "C" fn parameter_get_keyword(
+    ctx: *mut Context,
+    name: *const ffi::c_char,
+) -> *const ffi::c_char {
+    let ctx = if let Some(ctx) = unsafe { ctx.as_ref() } {
+        ctx
+    } else {
+        return ptr::null();
+    };
+    let parameter = if let Some(parameter) = get_parameter(ctx, name) {
+        parameter
+    } else {
+        return ptr::null();
+    };
+    match parameter {
+        (Specification::Keyword(options), Value::Index(i)) => {
+            options.0[*i].as_ptr() as *const ffi::c_char
+        }
         _ => ptr::null(),
     }
 }

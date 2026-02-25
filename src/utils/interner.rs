@@ -1,6 +1,9 @@
 use fxhash::FxHashSet;
 use lazy_static::lazy_static;
-use std::sync::{Arc, Mutex};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 
 lazy_static! {
     static ref INTERNER: Mutex<Interner> = Mutex::new(Interner(FxHashSet::default()));
@@ -25,6 +28,13 @@ pub(crate) trait Intern {
 }
 
 impl Intern for String {
+    fn intern(&self) -> Arc<str> {
+        let interner = &mut *INTERNER.lock().unwrap();
+        interner.intern(self)
+    }
+}
+
+impl<'a> Intern for Cow<'a, str> {
     fn intern(&self) -> Arc<str> {
         let interner = &mut *INTERNER.lock().unwrap();
         interner.intern(self)
