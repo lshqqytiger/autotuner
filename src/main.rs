@@ -79,7 +79,7 @@ struct Autotuner<'a> {
     sources: &'a [String],
     configuration: Configuration,
     cores: Option<Vec<usize>>,
-    temp_dir: TempDir,
+    temp_directory: TempDir,
     helper: Library,
     hook: Library,
     workspace: workspace::Workspace<'a>,
@@ -131,10 +131,10 @@ impl<'a> Autotuner<'a> {
             None
         };
 
-        let temp_dir = TempDir::new("autotuner")?;
-        fs::create_dir(temp_dir.path().join("individuals"))?;
+        let temp_directory = TempDir::new("autotuner")?;
+        fs::create_dir(temp_directory.path().join("individuals"))?;
 
-        let path = temp_dir.path().join("libhelper.so");
+        let path = temp_directory.path().join("libhelper.so");
         compile::compile(
             &configuration.compiler,
             &path,
@@ -142,7 +142,7 @@ impl<'a> Autotuner<'a> {
         )?;
         let helper = unsafe { Library::new(&path) }?;
 
-        let path = temp_dir.path().join("libhook.so");
+        let path = temp_directory.path().join("libhook.so");
         compile::compile(
             &configuration.compiler,
             &path,
@@ -162,7 +162,7 @@ impl<'a> Autotuner<'a> {
         Ok(Autotuner {
             sources,
             configuration,
-            temp_dir,
+            temp_directory,
             helper,
             hook,
             workspace,
@@ -505,12 +505,18 @@ impl<'a> Autotuner<'a> {
     }
 
     fn evaluate(&self, individual: &Individual, repetition: usize) -> f64 {
-        let temp_dir = self.temp_dir.path();
+        let temp_directory = self.temp_directory.path();
+        let working_directory = temp_directory
+            .join("individuals")
+            .join(individual.id.as_ref());
+        if !working_directory.exists() {
+            fs::create_dir(&working_directory).unwrap();
+        }
 
         let mut context = Context::new(
             &self.configuration.profile,
             individual,
-            temp_dir.as_os_str().as_encoded_bytes(),
+            working_directory.as_os_str().as_encoded_bytes(),
         );
         for name in &self.configuration.hooks.pre {
             unsafe {
@@ -522,10 +528,7 @@ impl<'a> Autotuner<'a> {
             return self.configuration.criterion.invalid();
         }
 
-        let path = temp_dir
-            .join("individuals")
-            .join(individual.id.as_ref())
-            .with_extension("so");
+        let path = temp_directory.join("lib").with_extension("so");
         if !path.exists() {
             compile::compile(
                 &self.configuration.compiler,
