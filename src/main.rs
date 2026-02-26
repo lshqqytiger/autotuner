@@ -19,7 +19,7 @@ use crate::{
     hook::Hook,
     parameter::Individual,
     runner::Runner,
-    strategies::{exhaustive::Exhaustive, options::Step, Checkpoint},
+    strategies::{Checkpoint, exhaustive::Exhaustive, options::Step},
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
@@ -505,8 +505,9 @@ impl<'a> Autotuner<'a> {
     }
 
     fn evaluate(&self, individual: &Individual, repetition: usize) -> f64 {
-        let temp_directory = self.temp_directory.path();
-        let working_directory = temp_directory
+        let working_directory = self
+            .temp_directory
+            .path()
             .join("individuals")
             .join(individual.id.as_ref());
         if !working_directory.exists() {
@@ -528,7 +529,7 @@ impl<'a> Autotuner<'a> {
             return self.configuration.criterion.invalid();
         }
 
-        let path = temp_directory.join("lib").with_extension("so");
+        let path = working_directory.join("lib.so");
         if !path.exists() {
             compile::compile(
                 &self.configuration.compiler,
