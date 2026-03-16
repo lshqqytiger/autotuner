@@ -1,45 +1,41 @@
-use crate::parameter::{Individual, Specification, Value};
+use crate::parameter::{Individual, Profile, Value};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct State {
-    pub(crate) names: Vec<Arc<str>>,
-    pub(crate) values: Vec<Value>,
-    pub(crate) specifications: Vec<Arc<Specification>>,
-    pub(crate) done: bool,
-}
+pub(crate) struct State(pub(crate) Option<BTreeMap<Arc<str>, Value>>);
 
-impl Iterator for State {
-    type Item = Individual;
+impl State {
+    pub(crate) fn new(profile: &Profile) -> Self {
+        State(Some(
+            profile
+                .0
+                .iter()
+                .map(|(name, specification)| (name.clone(), specification.get_space().first()))
+                .collect(),
+        ))
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
+    pub(crate) fn next(&mut self, profile: &Profile) -> Option<Individual> {
+        if let Some(current) = &self.0 {
+            let individual = Individual::new(current.clone());
+            let mut next = current.clone();
 
-        let parameters = self
-            .names
-            .iter()
-            .cloned()
-            .zip(self.values.iter().cloned())
-            .collect::<BTreeMap<Arc<str>, Value>>();
-        let individual = Individual::new(parameters);
-
-        for index in (0..self.values.len()).rev() {
-            if let Some(next_value) = self.specifications[index]
-                .get_space()
-                .next(&self.values[index])
-            {
-                self.values[index] = next_value;
-                for reset_index in index + 1..self.values.len() {
-                    self.values[reset_index] = self.specifications[reset_index].get_space().first();
+            for (name, specification) in profile.0.iter().rev() {
+                if let Some(&current_value) = next.get(name) {
+                    if let Some(next_value) = specification.get_space().next(current_value) {
+                        next.insert(name.clone(), next_value);
+                        self.0 = Some(next);
+                        return Some(individual);
+                    }
+                    next.insert(name.clone(), specification.get_space().first());
                 }
-                return Some(individual);
             }
-        }
 
-        self.done = true;
-        Some(individual)
+            self.0 = None;
+            Some(individual)
+        } else {
+            None
+        }
     }
 }

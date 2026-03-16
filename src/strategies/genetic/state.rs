@@ -1,34 +1,25 @@
-use crate::parameter::{Individual, Profile, Value};
+use crate::parameter::{Individual, Profile};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct State {
     pub(crate) generation: usize,
     pub(crate) count: usize,
-    pub(crate) population: Vec<Rc<Individual>>,
+    pub(crate) population: Vec<Arc<Individual>>,
 }
 
 impl State {
-    pub(crate) fn sample(profile: &Profile) -> Rc<Individual> {
-        Rc::new(Individual::new(
-            profile
-                .0
-                .iter()
-                .map(|(name, parameter)| (name.clone(), parameter.get_space().random()))
-                .collect::<BTreeMap<Arc<str>, Value>>(),
-        ))
-    }
-
     pub(crate) fn new(profile: &Profile, initial: usize) -> Self {
-        let mut individuals = Vec::with_capacity(initial);
-        for _ in 0..initial {
-            individuals.push(Self::sample(profile));
-        }
+        let population = (0..initial)
+            .into_par_iter()
+            .map(|_| Arc::new(Individual::random(profile)))
+            .collect::<Vec<_>>();
         State {
             generation: 1,
             count: 0,
-            population: individuals,
+            population,
         }
     }
 }

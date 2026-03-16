@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy)]
 pub(crate) enum Criterion {
     Maximum,
     Minimum,

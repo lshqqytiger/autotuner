@@ -1,4 +1,3 @@
-pub(crate) mod execution_result;
 pub(crate) mod options;
 pub(crate) mod output;
 pub(crate) mod state;
@@ -10,7 +9,7 @@ use crate::strategies::execution_log::ExecutionLog;
 use crate::strategies::genetic::options::Mutation;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::SystemTime;
 
 trait Genetic {
@@ -31,19 +30,19 @@ impl Genetic for Specification {
 }
 
 trait GeneticSpace {
-    fn crossover(&self, a: &Value, b: &Value) -> Value;
+    fn crossover(&self, a: Value, b: Value) -> Value;
     fn mutate(&self, mutations: &Mutation, value: &mut Value);
 }
 
 impl GeneticSpace for IntegerSpace {
-    fn crossover(&self, a: &Value, b: &Value) -> Value {
+    fn crossover(&self, a: Value, b: Value) -> Value {
         match (self, a, b) {
             (IntegerSpace::Sequence(_, _), Value::Integer(a), Value::Integer(b)) => {
-                Value::Integer((*a + *b) / 2)
+                Value::Integer((a + b) / 2)
             }
             (IntegerSpace::Candidates(_), Value::Index(a), Value::Index(b)) => {
-                if *a == *b {
-                    Value::Index(*a)
+                if a == b {
+                    Value::Index(a)
                 } else {
                     self.random()
                 }
@@ -86,11 +85,11 @@ impl GeneticSpace for IntegerSpace {
 }
 
 impl GeneticSpace for SwitchSpace {
-    fn crossover(&self, a: &Value, b: &Value) -> Value {
+    fn crossover(&self, a: Value, b: Value) -> Value {
         match (a, b) {
             (Value::Switch(a), Value::Switch(b)) => {
-                if *a == *b {
-                    Value::Switch(*a)
+                if a == b {
+                    Value::Switch(a)
                 } else {
                     self.random()
                 }
@@ -113,11 +112,11 @@ impl GeneticSpace for SwitchSpace {
 }
 
 impl GeneticSpace for KeywordSpace {
-    fn crossover(&self, a: &Value, b: &Value) -> Value {
+    fn crossover(&self, a: Value, b: Value) -> Value {
         match (a, b) {
             (Value::Index(a), Value::Index(b)) => {
-                if *a == *b {
-                    Value::Index(*a)
+                if a == b {
+                    Value::Index(a)
                 } else {
                     self.random()
                 }
@@ -179,7 +178,7 @@ pub(crate) fn crossover(profile: &Profile, a: &Individual, b: &Individual) -> In
             |mut parameters, parameter| {
                 let specification = profile.0.get(parameter.0).unwrap();
                 let space = specification.get_genetic_space();
-                let value = space.crossover(&a.parameters[parameter.0], &b.parameters[parameter.0]);
+                let value = space.crossover(a.parameters[parameter.0], b.parameters[parameter.0]);
                 parameters.insert(parameter.0.clone(), value);
                 parameters
             },
@@ -208,35 +207,36 @@ pub(crate) fn mutate(profile: &Profile, options: &Mutation, individual: &mut Ind
 pub(crate) fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usize> {
     assert!(!roulette.is_empty());
     assert_ne!(n, 0);
-
-    assert!(roulette.iter().all(|(f, _)| *f >= 0.0));
+    assert!(n <= roulette.len());
 
     let total_fitness: f64 = roulette.iter().map(|(fitness, _)| fitness).sum();
-    assert!(total_fitness > 0.0);
 
     let distance = total_fitness / n as f64;
     let start = rand::random::<f64>() * distance;
 
-    let mut selected = Vec::with_capacity(n);
+    let mut cumulative = Vec::with_capacity(roulette.len());
+    let mut acc = 0.0;
+    for (fitness, _) in roulette {
+        acc += *fitness;
+        cumulative.push(acc);
+    }
 
-    let mut current_sum = 0.0;
-    let mut current_index = 0usize;
+    let mut selected_positions = HashSet::with_capacity(n);
+    let mut selected = Vec::with_capacity(n);
 
     for i in 0..n {
         let pointer = start + i as f64 * distance;
 
-        while current_index < roulette.len() && current_sum < pointer {
-            current_sum += roulette[current_index].0;
-            current_index += 1;
+        let mut position = cumulative.partition_point(|sum| *sum < pointer);
+        if position >= roulette.len() {
+            position = roulette.len() - 1;
         }
 
-        if current_index == 0 {
-            selected.push(roulette[0].1);
-        } else if current_index <= roulette.len() {
-            selected.push(roulette[current_index - 1].1);
-        } else {
-            selected.push(roulette[roulette.len() - 1].1);
+        while !selected_positions.insert(position) {
+            position = (position + 1) % roulette.len();
         }
+
+        selected.push(roulette[position].1);
     }
 
     selected

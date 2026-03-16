@@ -1,6 +1,6 @@
 use crate::{
     parameter::{Individual, Profile},
-    strategies::execution_log::ExecutionLog,
+    strategies::execution_log::{ExecutionLog, IntoLog},
 };
 use std::cmp;
 
@@ -26,8 +26,8 @@ impl Ord for ExecutionResult {
     }
 }
 
-impl ExecutionResult {
-    pub(crate) fn into_log(self, profile: &Profile) -> ExecutionLog {
+impl IntoLog for ExecutionResult {
+    fn into_log(self, profile: &Profile) -> ExecutionLog {
         ExecutionLog(profile.stringify(&self.0), self.1)
     }
 }

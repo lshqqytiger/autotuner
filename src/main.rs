@@ -19,17 +19,17 @@ use crate::{
     hook::Hook,
     parameter::Individual,
     runner::Runner,
-    strategies::{Checkpoint, exhaustive::Exhaustive, options::Step},
+    strategies::{Checkpoint, execution_log::Log, output::IntoJson},
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
-use argh::FromArgs;
+use argh::{FromArgValue, FromArgs};
 use fxhash::FxHashMap;
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::Library;
 use rand::seq::SliceRandom;
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, hint, process, rc::Rc, time::SystemTime};
+use std::{fs, hint, process, sync::Arc, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -56,7 +56,7 @@ struct Options {
 
     #[argh(option, short = 'r', default = "15")]
     /// number of repetitions for each individual (default: 15)
-    repetition: usize,
+    repeat: usize,
 
     #[argh(option, default = "32")]
     /// number of candidates (default: 32)
@@ -70,9 +70,27 @@ struct Options {
     /// output file (default: result.json)
     output: String,
 
-    #[argh(switch, short = 'v')]
-    /// verbose output
-    verbose: bool,
+    #[argh(option, short = 'l', default = "LogLevel::Normal")]
+    /// logging level
+    log_level: LogLevel,
+}
+
+#[derive(PartialEq, PartialOrd, Eq, Ord)]
+pub(crate) enum LogLevel {
+    Quiet = 0,
+    Normal = 1,
+    Verbose = 2,
+}
+
+impl FromArgValue for LogLevel {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        match value.to_lowercase().as_str() {
+            "quiet" => Ok(LogLevel::Quiet),
+            "normal" => Ok(LogLevel::Normal),
+            "verbose" => Ok(LogLevel::Verbose),
+            _ => Err(format!("Invalid log level: {}", value)),
+        }
+    }
 }
 
 struct Autotuner<'a> {
@@ -175,7 +193,7 @@ impl<'a> Autotuner<'a> {
         repetition: usize,
         candidates: usize,
         checkpoint: Option<Checkpoint>,
-        verbose: bool,
+        log_level: LogLevel,
     ) -> Union<serde_json::Value, Checkpoint> {
         let is_canceled = ManuallyMove::new(false);
         let sigquit_handler = unsafe {
@@ -187,41 +205,111 @@ impl<'a> Autotuner<'a> {
         };
 
         let output = match &self.configuration.strategy {
-            strategies::Strategy::Exhaustive(_) => {
+            strategies::Strategy::Exhaustive(options) => {
                 let mut ranking = strategies::exhaustive::output::Ranking::new(
-                    &self.configuration.direction,
+                    self.configuration.direction,
                     candidates,
                 );
                 let mut state = if let Some(Checkpoint::Exhaustive(state)) = checkpoint {
                     state
                 } else {
-                    self.configuration.profile.iter()
+                    strategies::exhaustive::state::State::new(&self.configuration.profile)
                 };
 
-                let mut count = 1;
-                for individual in &mut state {
-                    guard!(SIGQUIT, {
-                        println!("{}/{}: ", count, self.configuration.profile.len());
+                if options.iterative {
+                    let mut individual = Individual::random(&self.configuration.profile);
+                    for i in 0..options.repeat {
+                        println!("{}", self.configuration.profile.stringify(&individual));
+                        for (name, specification) in self.configuration.profile.0.iter() {
+                            let space = specification.get_space();
 
-                        let result = self.evaluate(&individual, repetition);
-                        print!("{}", result);
-                        if let Some(unit) = &self.configuration.unit {
-                            print!(" {}", unit);
+                            let mut best = (space.first(), self.configuration.direction.worst());
+                            individual.parameters.insert(name.clone(), best.0);
+
+                            loop {
+                                guard!(SIGQUIT, {
+                                    let result = self.evaluate(&individual, repetition);
+                                    if result.is_finite() || log_level >= LogLevel::Normal {
+                                        print!("{}/{}: {}", i, options.repeat, result);
+                                        if result.is_finite() {
+                                            if let Some(unit) = &self.configuration.unit {
+                                                print!(" {}", unit);
+                                            }
+                                        }
+                                        println!();
+                                        if log_level >= LogLevel::Verbose {
+                                            println!(
+                                                "{}={}",
+                                                name,
+                                                specification
+                                                    .stringify(individual.parameters[name])
+                                            );
+                                        }
+                                        println!();
+                                    }
+
+                                    if self.configuration.direction.compare(result, best.1).is_gt()
+                                    {
+                                        best = (individual.parameters[name], result);
+                                    }
+
+                                    ranking.push(individual.clone(), result);
+                                });
+
+                                if *is_canceled {
+                                    break;
+                                }
+
+                                if let Some(next) = space.next(individual.parameters[name]) {
+                                    individual.parameters.insert(name.clone(), next);
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            individual.parameters.insert(name.clone(), best.0);
                         }
-                        println!();
-                        if verbose {
-                            println!("{}", self.configuration.profile.stringify(&individual));
+
+                        if *is_canceled {
+                            break;
                         }
-                        println!();
-
-                        ranking.push(individual, result);
-                    });
-
-                    if *is_canceled {
-                        break;
                     }
+                } else {
+                    let mut count = 1;
+                    while let Some(individual) = state.next(&self.configuration.profile) {
+                        guard!(SIGQUIT, {
+                            let result = self.evaluate(&individual, repetition);
+                            if result.is_finite() || log_level >= LogLevel::Normal {
+                                print!(
+                                    "{}/{}: {}",
+                                    count,
+                                    self.configuration.profile.len(),
+                                    result
+                                );
+                                if result.is_finite() {
+                                    if let Some(unit) = &self.configuration.unit {
+                                        print!(" {}", unit);
+                                    }
+                                }
+                                println!();
+                                if log_level >= LogLevel::Verbose {
+                                    println!(
+                                        "{}",
+                                        self.configuration.profile.stringify(&individual)
+                                    );
+                                }
+                                println!();
+                            }
 
-                    count += 1;
+                            ranking.push(individual, result);
+                        });
+
+                        if *is_canceled {
+                            break;
+                        }
+
+                        count += 1;
+                    }
                 }
 
                 if *is_canceled {
@@ -233,7 +321,7 @@ impl<'a> Autotuner<'a> {
             strategies::Strategy::Genetic(options) => {
                 let mut options = options.clone();
                 let mut output = strategies::genetic::output::Output::new(
-                    &self.configuration.direction,
+                    self.configuration.direction,
                     candidates,
                 );
                 let mut state = if let Some(Checkpoint::Genetic(state)) = checkpoint {
@@ -261,46 +349,44 @@ impl<'a> Autotuner<'a> {
                             let result = if let Some(&result) = temp_results.get(&index) {
                                 result
                             } else {
-                                print!("{}", state.generation);
-                                if let Some(limit) = options.terminate.limit {
-                                    print!("/{}", limit);
-                                } else {
-                                    print!(";");
-                                }
-                                print!(" {}/{}: ", index + 1, len);
-
                                 let result = self.evaluate(&state.population[index], repetition);
-                                print!("{}", result);
-                                if result.is_finite() {
-                                    if let Some(unit) = &self.configuration.unit {
-                                        print!(" {}", unit);
+                                if result.is_finite() || log_level >= LogLevel::Normal {
+                                    print!("{}", state.generation);
+                                    if let Some(limit) = options.terminate.limit {
+                                        print!("/{}", limit);
+                                    } else {
+                                        print!(";");
                                     }
+                                    print!(" {}/{}: {}", index + 1, len, result);
+                                    if result.is_finite() {
+                                        if let Some(unit) = &self.configuration.unit {
+                                            print!(" {}", unit);
+                                        }
+                                    }
+                                    println!();
+                                    if log_level >= LogLevel::Verbose {
+                                        println!(
+                                            "{}",
+                                            self.configuration
+                                                .profile
+                                                .stringify(&state.population[index])
+                                        );
+                                    }
+                                    println!();
                                 }
-                                println!();
-
-                                if verbose {
-                                    println!(
-                                        "{}",
-                                        self.configuration
-                                            .profile
-                                            .stringify(&state.population[index])
-                                    );
-                                }
-                                println!();
 
                                 result
                             };
 
                             if state.generation == 1 && result.is_infinite() {
-                                state.population[index] = strategies::genetic::state::State::sample(
-                                    &self.configuration.profile,
-                                );
+                                state.population[index] =
+                                    Arc::new(Individual::random(&self.configuration.profile));
                                 continue;
-                            } else {
-                                output.ranking.push(state.population[index].clone(), result);
-                                evaluation_results.push((result, index));
-                                index += 1;
                             }
+
+                            output.ranking.push(state.population[index].clone(), result);
+                            evaluation_results.push((result, index));
+                            index += 1;
                         });
 
                         if *is_canceled {
@@ -416,27 +502,26 @@ impl<'a> Autotuner<'a> {
                         );
 
                         guard!(SIGQUIT, {
-                            print!("{}", state.generation);
-                            if let Some(limit) = options.terminate.limit {
-                                print!("/{}", limit);
-                            } else {
-                                print!(";");
-                            }
-                            print!(" {}/{}: ", index + 1, options.generate.value);
-
                             let result = self.evaluate(&child, repetition);
-                            print!("{}", result);
-                            if result.is_finite() {
-                                if let Some(unit) = &self.configuration.unit {
-                                    print!(" {}", unit);
+                            if result.is_finite() || log_level >= LogLevel::Normal {
+                                print!("{}", state.generation);
+                                if let Some(limit) = options.terminate.limit {
+                                    print!("/{}", limit);
+                                } else {
+                                    print!(";");
                                 }
+                                print!(" {}/{}: {}", index + 1, options.generate.value, result);
+                                if result.is_finite() {
+                                    if let Some(unit) = &self.configuration.unit {
+                                        print!(" {}", unit);
+                                    }
+                                }
+                                println!();
+                                if log_level >= LogLevel::Verbose {
+                                    println!("{}", self.configuration.profile.stringify(&child));
+                                }
+                                println!();
                             }
-                            println!();
-
-                            if verbose {
-                                println!("{}", self.configuration.profile.stringify(&child));
-                            }
-                            println!();
 
                             // retry
                             if result.is_infinite() {
@@ -447,7 +532,7 @@ impl<'a> Autotuner<'a> {
                                 if index < options.delete.value {
                                     holes[index]
                                 } else {
-                                    index
+                                    state.population.len() + index - options.delete.value
                                 },
                                 result,
                             );
@@ -460,18 +545,19 @@ impl<'a> Autotuner<'a> {
                     // replace individuals with children
                     let min = options.generate.value.min(options.delete.value);
                     let generated = children.split_off(min);
-                    let deleted = holes.split_off(min);
+                    let mut deleted = holes.split_off(min);
                     assert!(generated.is_empty() || deleted.is_empty());
                     for (index, child) in children.into_iter().enumerate() {
-                        state.population[holes[index]] = Rc::new(child);
+                        state.population[holes[index]] = Arc::new(child);
                     }
                     if !generated.is_empty() {
                         for child in generated.into_iter() {
-                            state.population.push(Rc::new(child));
+                            state.population.push(Arc::new(child));
                         }
                     }
                     if !deleted.is_empty() {
-                        for index in deleted {
+                        deleted.sort();
+                        for index in deleted.into_iter().rev() {
                             state.population.remove(index);
                         }
                     }
@@ -479,9 +565,7 @@ impl<'a> Autotuner<'a> {
                     for _ in 0..options.infuse.value {
                         state
                             .population
-                            .push(strategies::genetic::state::State::sample(
-                                &self.configuration.profile,
-                            ));
+                            .push(Arc::new(Individual::random(&self.configuration.profile)));
                     }
 
                     options.step();
@@ -565,7 +649,7 @@ impl<'a> Autotuner<'a> {
                     unregister(id);
                 }
             };
-            let fitness = context.result.unwrap(&self.configuration.criterion);
+            let fitness = context.result.unwrap(self.configuration.criterion);
             if fitness.is_nan() {
                 panic!("NaN value encountered");
             }
@@ -584,7 +668,7 @@ impl<'a> Autotuner<'a> {
             }
         }
 
-        context.result.unwrap(&self.configuration.criterion)
+        context.result.unwrap(self.configuration.criterion)
     }
 }
 
@@ -608,10 +692,10 @@ fn main() -> anyhow::Result<()> {
     });
     match_union!(
         autotuner.run(
-            args.repetition,
+            args.repeat,
             args.candidates,
             state,
-            args.verbose,
+            args.log_level,
         );
         output => {
             fs::write(

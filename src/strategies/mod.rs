@@ -3,10 +3,9 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod exhaustive;
 pub(crate) mod genetic;
 
+pub(crate) mod execution_log;
 pub(crate) mod options;
-
-mod execution_log;
-mod heap;
+pub(crate) mod output;
 
 #[derive(Deserialize)]
 pub(crate) enum Strategy {

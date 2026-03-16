@@ -5,6 +5,7 @@ pub(crate) trait Sort<T> {
     fn sort(&self, results: &mut Vec<T>);
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum Direction {
     Minimize,
     Maximize,

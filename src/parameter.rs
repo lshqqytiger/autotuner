@@ -1,4 +1,5 @@
 use crate::utils::interner::Intern;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -12,7 +13,7 @@ use std::{
 pub(crate) trait Space {
     fn first(&self) -> Value;
     fn random(&self) -> Value;
-    fn next(&self, current: &Value) -> Option<Value>;
+    fn next(&self, current: Value) -> Option<Value>;
     fn len(&self) -> usize;
 }
 
@@ -41,17 +42,17 @@ impl Space for IntegerSpace {
         }
     }
 
-    fn next(&self, current: &Value) -> Option<Value> {
+    fn next(&self, current: Value) -> Option<Value> {
         match (self, current) {
             (IntegerSpace::Sequence(_, end), Value::Integer(n)) => {
-                if *n < *end {
+                if n < *end {
                     Some(Value::Integer(n + 1))
                 } else {
                     None
                 }
             }
             (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
-                if *i + 1 < candidates.len() {
+                if i + 1 < candidates.len() {
                     Some(Value::Index(i + 1))
                 } else {
                     None
@@ -83,10 +84,10 @@ impl Space for SwitchSpace {
         Value::Switch(rand::random())
     }
 
-    fn next(&self, current: &Value) -> Option<Value> {
+    fn next(&self, current: Value) -> Option<Value> {
         match current {
             Value::Switch(b) => {
-                if !*b {
+                if !b {
                     Some(Value::Switch(true))
                 } else {
                     None
@@ -116,10 +117,10 @@ impl Space for KeywordSpace {
         Value::Index(rand::random_range(0..self.0.len()))
     }
 
-    fn next(&self, current: &Value) -> Option<Value> {
+    fn next(&self, current: Value) -> Option<Value> {
         match current {
             Value::Index(i) => {
-                if *i + 1 < self.0.len() {
+                if i + 1 < self.0.len() {
                     Some(Value::Index(i + 1))
                 } else {
                     None
@@ -183,9 +184,48 @@ impl Specification {
             Specification::Keyword(options) => options,
         }
     }
+
+    pub(crate) fn stringify(&self, value: Value) -> String {
+        match (self, value) {
+            (
+                Specification::Integer {
+                    transformer: Some(transformer),
+                    space: IntegerSpace::Sequence(_, _),
+                },
+                Value::Integer(x),
+            ) => transformer.apply(x),
+            (
+                Specification::Integer {
+                    transformer: None,
+                    space: IntegerSpace::Sequence(_, _),
+                },
+                Value::Integer(x),
+            ) => x.to_string(),
+            (
+                Specification::Integer {
+                    transformer: Some(_),
+                    space: IntegerSpace::Candidates(_),
+                },
+                Value::Index(_),
+            ) => unimplemented!(),
+            (
+                Specification::Integer {
+                    transformer: None,
+                    space: IntegerSpace::Candidates(candidates),
+                },
+                Value::Index(i),
+            ) => candidates[i].to_string(),
+
+            (Specification::Switch, Value::Switch(x)) => x.to_string(),
+
+            (Specification::Keyword(KeywordSpace(options)), Value::Index(i)) => options[i].clone(),
+
+            _ => unreachable!(),
+        }
+    }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Copy)]
 pub(crate) enum Value {
     Integer(i32),
     Switch(bool),
@@ -209,48 +249,8 @@ impl Profile {
     pub(crate) fn stringify(&self, individual: &Individual) -> String {
         individual
             .parameters
-            .iter()
-            .map(|(name, value)| {
-                let value = match (self.0.get(name).unwrap().as_ref(), value) {
-                    (
-                        Specification::Integer {
-                            transformer: Some(transformer),
-                            space: IntegerSpace::Sequence(_, _),
-                        },
-                        Value::Integer(x),
-                    ) => transformer.apply(x),
-                    (
-                        Specification::Integer {
-                            transformer: None,
-                            space: IntegerSpace::Sequence(_, _),
-                        },
-                        Value::Integer(x),
-                    ) => x.to_string(),
-                    (
-                        Specification::Integer {
-                            transformer: Some(_),
-                            space: IntegerSpace::Candidates(_),
-                        },
-                        Value::Index(_),
-                    ) => unimplemented!(),
-                    (
-                        Specification::Integer {
-                            transformer: None,
-                            space: IntegerSpace::Candidates(candidates),
-                        },
-                        Value::Index(i),
-                    ) => candidates[*i].to_string(),
-
-                    (Specification::Switch, Value::Switch(x)) => x.to_string(),
-
-                    (Specification::Keyword(KeywordSpace(options)), Value::Index(i)) => {
-                        options[*i].clone()
-                    }
-
-                    _ => unreachable!(),
-                };
-                format!("{}={}", name, value)
-            })
+            .par_iter()
+            .map(|(name, &value)| format!("{}={}", name, self.0[name].stringify(value)))
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -264,6 +264,7 @@ impl Profile {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Individual {
     pub(crate) id: Arc<str>,
     pub(crate) parameters: BTreeMap<Arc<str>, Value>,
@@ -274,6 +275,14 @@ impl Hash for Individual {
         self.id.hash(state);
     }
 }
+
+impl PartialEq for Individual {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Individual {}
 
 impl Serialize for Individual {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -312,5 +321,15 @@ impl Individual {
                 .intern(),
             parameters,
         }
+    }
+
+    pub(crate) fn random(profile: &Profile) -> Self {
+        Self::new(
+            profile
+                .0
+                .iter()
+                .map(|(name, parameter)| (name.clone(), parameter.get_space().random()))
+                .collect::<BTreeMap<Arc<str>, Value>>(),
+        )
     }
 }

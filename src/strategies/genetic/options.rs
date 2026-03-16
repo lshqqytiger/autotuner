@@ -1,4 +1,4 @@
-use crate::strategies::options::{self, Step};
+use crate::strategies::options;
 use serde::Deserialize;
 
 fn default_initial() -> usize {
@@ -38,8 +38,8 @@ pub(crate) struct Options {
     pub(crate) mutate: Mutation,
 }
 
-impl Step for Options {
-    fn step(&mut self) {
+impl Options {
+    pub(crate) fn step(&mut self) {
         self.generate.step();
         self.delete.step();
         self.infuse.step();
@@ -89,8 +89,8 @@ pub(crate) struct KeywordMutation {
     pub(crate) probability: options::Real,
 }
 
-impl Step for Mutation {
-    fn step(&mut self) {
+impl Mutation {
+    pub(crate) fn step(&mut self) {
         for integer in &mut self.integer {
             integer.probability.step();
             if let Some(variation) = &mut integer.variation {

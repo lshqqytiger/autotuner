@@ -10,7 +10,7 @@ pub(crate) enum Result {
 }
 
 impl Result {
-    pub(crate) fn unwrap(&self, criterion: &Criterion) -> f64 {
+    pub(crate) fn unwrap(&self, criterion: Criterion) -> f64 {
         match self {
             Result::Valid(x) => *x,
             Result::Invalid => criterion.invalid(),
