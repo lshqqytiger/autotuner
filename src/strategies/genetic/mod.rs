@@ -7,6 +7,7 @@ use crate::parameter::{
 };
 use crate::strategies::execution_log::ExecutionLog;
 use crate::strategies::genetic::options::Mutation;
+use rand::seq::IteratorRandom;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -37,8 +38,12 @@ trait GeneticSpace {
 impl GeneticSpace for IntegerSpace {
     fn crossover(&self, a: Value, b: Value) -> Value {
         match (self, a, b) {
-            (IntegerSpace::Sequence(_, _), Value::Integer(a), Value::Integer(b)) => {
-                Value::Integer((a + b) / 2)
+            (IntegerSpace::Sequence(_, _, step), Value::Integer(a), Value::Integer(b)) => {
+                if let Some(step) = step {
+                    Value::Integer(((a + b) / 2 / step) * step)
+                } else {
+                    Value::Integer((a + b) / 2)
+                }
             }
             (IntegerSpace::Candidates(_), Value::Index(a), Value::Index(b)) => {
                 if a == b {
@@ -56,13 +61,20 @@ impl GeneticSpace for IntegerSpace {
             if rand::random_bool(mutation.probability.value) {
                 if let Some(variation) = &mutation.variation {
                     match (self, code) {
-                        (IntegerSpace::Sequence(start, end), Value::Integer(n)) => {
-                            let mut variation = ((end - start) as f64 * variation.value) as i32;
-                            if variation == 0 {
-                                variation = 1;
+                        (IntegerSpace::Sequence(start, end, step), Value::Integer(n)) => {
+                            let mut variation = (end - start) as f64 * variation.value;
+                            if let Some(step) = step {
+                                variation = (variation / *step as f64).round() * *step as f64;
                             }
+                            let variation = if (variation as i32) == 0 {
+                                1
+                            } else {
+                                variation as i32
+                            };
 
-                            *n += rand::random_range(-variation..=variation);
+                            let step = step.unwrap_or(1);
+                            let iter = (-variation..=variation).step_by(step as usize).into_iter();
+                            *n += iter.choose(&mut rand::rng()).unwrap();
 
                             if *n < *start {
                                 *n = *start;

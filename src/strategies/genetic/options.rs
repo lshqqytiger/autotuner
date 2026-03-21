@@ -57,6 +57,23 @@ pub(crate) struct Mutation {
     pub(crate) keyword: Option<KeywordMutation>,
 }
 
+impl Mutation {
+    pub(crate) fn step(&mut self) {
+        for integer in &mut self.integer {
+            integer.probability.step();
+            if let Some(variation) = &mut integer.variation {
+                variation.step();
+            }
+        }
+        if let Some(switch) = &mut self.switch {
+            switch.probability.step();
+        }
+        if let Some(keyword) = &mut self.keyword {
+            keyword.probability.step();
+        }
+    }
+}
+
 fn default_integer_mutation_probability() -> options::Real {
     0.1.into()
 }
@@ -87,23 +104,6 @@ fn default_keyword_mutation_probability() -> options::Real {
 pub(crate) struct KeywordMutation {
     #[serde(default = "default_keyword_mutation_probability")]
     pub(crate) probability: options::Real,
-}
-
-impl Mutation {
-    pub(crate) fn step(&mut self) {
-        for integer in &mut self.integer {
-            integer.probability.step();
-            if let Some(variation) = &mut integer.variation {
-                variation.step();
-            }
-        }
-        if let Some(switch) = &mut self.switch {
-            switch.probability.step();
-        }
-        if let Some(keyword) = &mut self.keyword {
-            keyword.probability.step();
-        }
-    }
 }
 
 #[derive(Deserialize, Clone)]

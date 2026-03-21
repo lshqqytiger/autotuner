@@ -167,7 +167,7 @@ extern "C" fn parameter_get_integer(
         (
             Specification::Integer {
                 transformer: _,
-                space: IntegerSpace::Sequence(_, _),
+                space: IntegerSpace::Sequence(_, _, _),
             },
             Value::Integer(v),
         ) => v as *const ffi::c_int,

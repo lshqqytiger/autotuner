@@ -1,4 +1,5 @@
 use crate::utils::interner::Intern;
+use rand::seq::IteratorRandom;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,7 +20,7 @@ pub(crate) trait Space {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum IntegerSpace {
-    Sequence(i32, i32),
+    Sequence(i32, i32, #[serde(default)] Option<i32>),
     Candidates(Vec<i32>),
 }
 
@@ -27,7 +28,7 @@ impl Space for IntegerSpace {
     #[inline]
     fn first(&self) -> Value {
         match self {
-            IntegerSpace::Sequence(start, _) => Value::Integer(*start),
+            IntegerSpace::Sequence(start, _, _) => Value::Integer(*start),
             IntegerSpace::Candidates(_) => Value::Index(0),
         }
     }
@@ -35,7 +36,11 @@ impl Space for IntegerSpace {
     #[inline]
     fn random(&self) -> Value {
         match self {
-            IntegerSpace::Sequence(start, end) => Value::Integer(rand::random_range(*start..=*end)),
+            IntegerSpace::Sequence(start, end, step) => {
+                let step = step.unwrap_or(1);
+                let iter = (*start..=*end).step_by(step as usize).into_iter();
+                Value::Integer(iter.choose(&mut rand::rng()).unwrap())
+            }
             IntegerSpace::Candidates(candidates) => {
                 Value::Index(rand::random_range(0..candidates.len()))
             }
@@ -44,9 +49,10 @@ impl Space for IntegerSpace {
 
     fn next(&self, current: Value) -> Option<Value> {
         match (self, current) {
-            (IntegerSpace::Sequence(_, end), Value::Integer(n)) => {
-                if n < *end {
-                    Some(Value::Integer(n + 1))
+            (IntegerSpace::Sequence(_, end, step), Value::Integer(n)) => {
+                let step = step.unwrap_or(1);
+                if n + step <= *end {
+                    Some(Value::Integer(n + step))
                 } else {
                     None
                 }
@@ -65,7 +71,10 @@ impl Space for IntegerSpace {
     #[inline]
     fn len(&self) -> usize {
         match self {
-            IntegerSpace::Sequence(start, end) => (*end - *start + 1) as usize,
+            IntegerSpace::Sequence(start, end, step) => {
+                let step = step.unwrap_or(1);
+                ((*end - *start) / step + 1) as usize
+            }
             IntegerSpace::Candidates(candidates) => candidates.len(),
         }
     }
@@ -190,14 +199,14 @@ impl Specification {
             (
                 Specification::Integer {
                     transformer: Some(transformer),
-                    space: IntegerSpace::Sequence(_, _),
+                    space: IntegerSpace::Sequence(_, _, _),
                 },
                 Value::Integer(x),
             ) => transformer.apply(x),
             (
                 Specification::Integer {
                     transformer: None,
-                    space: IntegerSpace::Sequence(_, _),
+                    space: IntegerSpace::Sequence(_, _, _),
                 },
                 Value::Integer(x),
             ) => x.to_string(),
