@@ -1,6 +1,6 @@
 use crate::{
     context::{self, Context},
-    parameter::{IntegerSpace, Specification, Value},
+    parameter::{Specification, Value, space},
     utils::interner::Intern,
     workspace::Workspace,
 };
@@ -152,7 +152,7 @@ fn get_parameter<'a>(
 extern "C" fn parameter_get_integer(
     ctx: *mut Context,
     name: *const ffi::c_char,
-) -> *const ffi::c_int {
+) -> *const ffi::c_uint {
     let ctx = if let Some(ctx) = unsafe { ctx.as_ref() } {
         ctx
     } else {
@@ -166,18 +166,18 @@ extern "C" fn parameter_get_integer(
     match parameter {
         (
             Specification::Integer {
-                transformer: _,
-                space: IntegerSpace::Sequence(_, _, _),
+                space: space::Integer::Sequence(_, _),
+                condition: _,
             },
             Value::Integer(v),
-        ) => v as *const ffi::c_int,
+        ) => v as *const ffi::c_uint,
         (
             Specification::Integer {
-                transformer: _,
-                space: IntegerSpace::Candidates(candidates),
+                space: space::Integer::Candidates(candidates),
+                condition: _,
             },
             Value::Index(i),
-        ) => &candidates[*i] as *const ffi::c_int,
+        ) => &candidates[*i] as *const ffi::c_uint,
         _ => ptr::null(),
     }
 }

@@ -5,6 +5,7 @@ mod criterion;
 mod direction;
 mod helper;
 mod hook;
+mod individual;
 mod parameter;
 mod runner;
 mod strategies;
@@ -14,10 +15,10 @@ mod workspace;
 use crate::{
     configuration::Configuration,
     context::Context,
-    direction::{Direction, Sort},
+    direction::Direction,
     helper::Helper,
     hook::Hook,
-    parameter::Individual,
+    individual::Individual,
     runner::Runner,
     strategies::{Checkpoint, execution_log::Log, output::IntoJson},
     utils::{manually_move::ManuallyMove, union::Union},
@@ -456,10 +457,13 @@ impl<'a> Autotuner<'a> {
 
                         pair.0 = match self.configuration.direction {
                             Direction::Minimize => pair.0,
-                            Direction::Maximize => worst - pair.0,
+                            Direction::Maximize => best - pair.0,
                         };
                     }
-                    self.configuration.direction.sort(&mut inverted);
+                    match self.configuration.direction {
+                        Direction::Minimize => inverted.sort_by(|a, b| b.0.total_cmp(&a.0)),
+                        Direction::Maximize => inverted.sort_by(|a, b| a.0.total_cmp(&b.0)),
+                    }
                     inverted.truncate(inverted.len() - options.remain);
                     inverted.shuffle(&mut rng);
                     let mut holes = strategies::genetic::stochastic_universal_sampling(
@@ -558,6 +562,7 @@ impl<'a> Autotuner<'a> {
                     if !deleted.is_empty() {
                         deleted.sort();
                         for index in deleted.into_iter().rev() {
+                            // FIXME: strange behavior
                             state.population.remove(index);
                         }
                     }

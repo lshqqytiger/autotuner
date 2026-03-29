@@ -1,7 +1,4 @@
-use crate::{
-    direction::Direction,
-    parameter::{Individual, Profile},
-};
+use crate::{direction::Direction, individual::Individual, parameter::Profile};
 use serde::Serialize;
 use std::sync::Arc;
 

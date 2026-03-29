@@ -1,4 +1,7 @@
-use crate::parameter::{Individual, Profile, Value};
+use crate::{
+    individual::Individual,
+    parameter::{Profile, Value},
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 

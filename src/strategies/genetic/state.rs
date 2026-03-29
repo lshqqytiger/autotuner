@@ -1,4 +1,4 @@
-use crate::parameter::{Individual, Profile};
+use crate::{individual::Individual, parameter::Profile};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

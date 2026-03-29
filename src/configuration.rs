@@ -17,5 +17,6 @@ pub(crate) struct Configuration {
     #[serde(default)]
     pub(crate) hooks: hook::Configuration,
     pub(crate) compiler: String,
+    #[serde(default)]
     pub(crate) compiler_arguments: Vec<String>,
 }

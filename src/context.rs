@@ -1,7 +1,4 @@
-use crate::{
-    criterion::Criterion,
-    parameter::{Individual, Profile},
-};
+use crate::{criterion::Criterion, individual::Individual, parameter::Profile};
 
 pub(crate) enum Result {
     Valid(f64),

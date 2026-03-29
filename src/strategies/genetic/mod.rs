@@ -2,12 +2,10 @@ pub(crate) mod options;
 pub(crate) mod output;
 pub(crate) mod state;
 
-use crate::parameter::{
-    Individual, IntegerSpace, KeywordSpace, Profile, Space, Specification, SwitchSpace, Value,
-};
+use crate::individual::Individual;
+use crate::parameter::{Profile, Space, Specification, Value, space};
 use crate::strategies::execution_log::ExecutionLog;
 use crate::strategies::genetic::options::Mutation;
-use rand::seq::IteratorRandom;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -21,8 +19,8 @@ impl Genetic for Specification {
     fn get_genetic_space(&self) -> &dyn GeneticSpace {
         match self {
             Specification::Integer {
-                transformer: _,
                 space,
+                condition: _,
             } => space,
             Specification::Switch => &Self::SWITCH_SPACE,
             Specification::Keyword(options) => options,
@@ -35,17 +33,13 @@ trait GeneticSpace {
     fn mutate(&self, mutations: &Mutation, value: &mut Value);
 }
 
-impl GeneticSpace for IntegerSpace {
+impl GeneticSpace for space::Integer {
     fn crossover(&self, a: Value, b: Value) -> Value {
         match (self, a, b) {
-            (IntegerSpace::Sequence(_, _, step), Value::Integer(a), Value::Integer(b)) => {
-                if let Some(step) = step {
-                    Value::Integer(((a + b) / 2 / step) * step)
-                } else {
-                    Value::Integer((a + b) / 2)
-                }
+            (space::Integer::Sequence(_, _), Value::Integer(a), Value::Integer(b)) => {
+                Value::Integer((a + b) / 2)
             }
-            (IntegerSpace::Candidates(_), Value::Index(a), Value::Index(b)) => {
+            (space::Integer::Candidates(_), Value::Index(a), Value::Index(b)) => {
                 if a == b {
                     Value::Index(a)
                 } else {
@@ -61,28 +55,16 @@ impl GeneticSpace for IntegerSpace {
             if rand::random_bool(mutation.probability.value) {
                 if let Some(variation) = &mutation.variation {
                     match (self, code) {
-                        (IntegerSpace::Sequence(start, end, step), Value::Integer(n)) => {
-                            let mut variation = (end - start) as f64 * variation.value;
-                            if let Some(step) = step {
-                                variation = (variation / *step as f64).round() * *step as f64;
+                        (space::Integer::Sequence(start, end), Value::Integer(n)) => {
+                            let mut variation = ((end - start) as f64 * variation.value) as i32;
+                            if variation == 0 {
+                                variation = 1;
                             }
-                            let variation = if (variation as i32) == 0 {
-                                1
-                            } else {
-                                variation as i32
-                            };
 
-                            let step = step.unwrap_or(1);
-                            let iter = (-variation..=variation).step_by(step as usize).into_iter();
-                            *n += iter.choose(&mut rand::rng()).unwrap();
-
-                            if *n < *start {
-                                *n = *start;
-                            } else if *n > *end {
-                                *n = *end;
-                            }
+                            let mutated = (*n as i32) + rand::random_range(-variation..=variation);
+                            *n = if mutated < 0 { 0 } else { mutated as u32 };
                         }
-                        (IntegerSpace::Candidates(candidates), Value::Index(i)) => {
+                        (space::Integer::Candidates(candidates), Value::Index(i)) => {
                             *i = rand::random_range(0..candidates.len());
                         }
                         _ => unreachable!(),
@@ -96,7 +78,7 @@ impl GeneticSpace for IntegerSpace {
     }
 }
 
-impl GeneticSpace for SwitchSpace {
+impl GeneticSpace for space::Switch {
     fn crossover(&self, a: Value, b: Value) -> Value {
         match (a, b) {
             (Value::Switch(a), Value::Switch(b)) => {
@@ -123,7 +105,7 @@ impl GeneticSpace for SwitchSpace {
     }
 }
 
-impl GeneticSpace for KeywordSpace {
+impl GeneticSpace for space::Keyword {
     fn crossover(&self, a: Value, b: Value) -> Value {
         match (a, b) {
             (Value::Index(a), Value::Index(b)) => {
@@ -214,6 +196,7 @@ pub(crate) fn mutate(profile: &Profile, options: &Mutation, individual: &mut Ind
             let space = specification.get_genetic_space();
             space.mutate(options, parameter);
         });
+    profile.adjust(individual);
 }
 
 pub(crate) fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usize> {

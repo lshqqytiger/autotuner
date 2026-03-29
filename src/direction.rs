@@ -1,10 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cmp;
 
-pub(crate) trait Sort<T> {
-    fn sort(&self, results: &mut Vec<T>);
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum Direction {
     Minimize,
@@ -64,12 +60,6 @@ impl Direction {
             Direction::Minimize => (min, max),
             Direction::Maximize => (max, min),
         }
-    }
-}
-
-impl Sort<(f64, usize)> for Direction {
-    fn sort(&self, results: &mut Vec<(f64, usize)>) {
-        results.sort_by(|a, b| self.compare(a.0, b.0));
     }
 }
 

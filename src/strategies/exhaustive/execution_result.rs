@@ -1,5 +1,6 @@
 use crate::{
-    parameter::{Individual, Profile},
+    individual::Individual,
+    parameter::Profile,
     strategies::execution_log::{ExecutionLog, IntoLog},
 };
 use std::cmp;

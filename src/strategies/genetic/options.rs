@@ -1,4 +1,4 @@
-use crate::strategies::options;
+use crate::strategies::options::{Real, Usize};
 use serde::Deserialize;
 
 fn default_initial() -> usize {
@@ -9,15 +9,15 @@ fn default_remain() -> usize {
     0
 }
 
-fn default_generate() -> options::Usize {
+fn default_generate() -> Usize {
     64.into()
 }
 
-fn default_delete() -> options::Usize {
+fn default_delete() -> Usize {
     64.into()
 }
 
-fn default_infuse() -> options::Usize {
+fn default_infuse() -> Usize {
     0.into()
 }
 
@@ -28,11 +28,11 @@ pub(crate) struct Options {
     #[serde(default = "default_remain")]
     pub(crate) remain: usize,
     #[serde(default = "default_generate")]
-    pub(crate) generate: options::Usize,
+    pub(crate) generate: Usize,
     #[serde(default = "default_delete")]
-    pub(crate) delete: options::Usize,
+    pub(crate) delete: Usize,
     #[serde(default = "default_infuse")]
-    pub(crate) infuse: options::Usize,
+    pub(crate) infuse: Usize,
     pub(crate) terminate: Termination,
     #[serde(default)]
     pub(crate) mutate: Mutation,
@@ -74,36 +74,36 @@ impl Mutation {
     }
 }
 
-fn default_integer_mutation_probability() -> options::Real {
+fn default_integer_mutation_probability() -> Real {
     0.1.into()
 }
 
 #[derive(Deserialize, Clone)]
 pub(crate) struct IntegerMutation {
     #[serde(default = "default_integer_mutation_probability")]
-    pub(crate) probability: options::Real,
+    pub(crate) probability: Real,
     #[serde(default)]
-    pub(crate) variation: Option<options::Real>,
+    pub(crate) variation: Option<Real>,
 }
 
-fn default_switch_mutation_probability() -> options::Real {
+fn default_switch_mutation_probability() -> Real {
     0.1.into()
 }
 
 #[derive(Deserialize, Clone)]
 pub(crate) struct SwitchMutation {
     #[serde(default = "default_switch_mutation_probability")]
-    pub(crate) probability: options::Real,
+    pub(crate) probability: Real,
 }
 
-fn default_keyword_mutation_probability() -> options::Real {
+fn default_keyword_mutation_probability() -> Real {
     0.1.into()
 }
 
 #[derive(Deserialize, Clone)]
 pub(crate) struct KeywordMutation {
     #[serde(default = "default_keyword_mutation_probability")]
-    pub(crate) probability: options::Real,
+    pub(crate) probability: Real,
 }
 
 #[derive(Deserialize, Clone)]

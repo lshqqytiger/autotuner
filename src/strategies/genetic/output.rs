@@ -1,6 +1,7 @@
 use crate::{
     direction::Direction,
-    parameter::{Individual, Profile},
+    individual::Individual,
+    parameter::Profile,
     strategies::{
         execution_log::{Log, SortBy},
         genetic::GenerationSummary,
