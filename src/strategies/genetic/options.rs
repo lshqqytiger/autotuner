@@ -1,5 +1,10 @@
 use crate::strategies::options::{Real, Usize};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Options {
+    pub(crate) hyperparameters: Hyperparameters,
+}
 
 fn default_initial() -> usize {
     128
@@ -21,8 +26,8 @@ fn default_infuse() -> Usize {
     0.into()
 }
 
-#[derive(Deserialize, Clone)]
-pub(crate) struct Options {
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct Hyperparameters {
     #[serde(default = "default_initial")]
     pub(crate) initial: usize,
     #[serde(default = "default_remain")]
@@ -38,7 +43,7 @@ pub(crate) struct Options {
     pub(crate) mutate: Mutation,
 }
 
-impl Options {
+impl Hyperparameters {
     pub(crate) fn step(&mut self) {
         self.generate.step();
         self.delete.step();
@@ -47,7 +52,7 @@ impl Options {
     }
 }
 
-#[derive(Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub(crate) struct Mutation {
     #[serde(default)]
     pub(crate) integer: Vec<IntegerMutation>,
@@ -78,7 +83,7 @@ fn default_integer_mutation_probability() -> Real {
     0.1.into()
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct IntegerMutation {
     #[serde(default = "default_integer_mutation_probability")]
     pub(crate) probability: Real,
@@ -90,7 +95,7 @@ fn default_switch_mutation_probability() -> Real {
     0.1.into()
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct SwitchMutation {
     #[serde(default = "default_switch_mutation_probability")]
     pub(crate) probability: Real,
@@ -100,13 +105,13 @@ fn default_keyword_mutation_probability() -> Real {
     0.1.into()
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct KeywordMutation {
     #[serde(default = "default_keyword_mutation_probability")]
     pub(crate) probability: Real,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct Termination {
     #[serde(default)]
     pub(crate) limit: Option<usize>,

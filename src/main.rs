@@ -127,10 +127,10 @@ impl<'a> Autotuner<'a> {
         match &configuration.strategy {
             strategies::Strategy::Exhaustive(_) => {}
             strategies::Strategy::Genetic(options) => {
-                if options.initial <= 1 {
+                if options.hyperparameters.initial <= 1 {
                     return Err(anyhow!("Initial population size must be greater than 1"));
                 }
-                if options.generate.value == 0 {
+                if options.hyperparameters.generate.value == 0 {
                     return Err(anyhow!("Number of each generation must be greater than 0"));
                 }
             }
@@ -320,7 +320,6 @@ impl<'a> Autotuner<'a> {
                 }
             }
             strategies::Strategy::Genetic(options) => {
-                let mut options = options.clone();
                 let mut output = strategies::genetic::output::Output::new(
                     self.configuration.direction,
                     candidates,
@@ -328,10 +327,7 @@ impl<'a> Autotuner<'a> {
                 let mut state = if let Some(Checkpoint::Genetic(state)) = checkpoint {
                     state
                 } else {
-                    strategies::genetic::state::State::new(
-                        &self.configuration.profile,
-                        options.initial,
-                    )
+                    strategies::genetic::state::State::new(&options, &self.configuration.profile)
                 };
 
                 let mut rng = rand::rng();
@@ -353,7 +349,7 @@ impl<'a> Autotuner<'a> {
                                 let result = self.evaluate(&state.population[index], repetition);
                                 if result.is_finite() || log_level >= LogLevel::Normal {
                                     print!("{}", state.generation);
-                                    if let Some(limit) = options.terminate.limit {
+                                    if let Some(limit) = state.hyperparameters.terminate.limit {
                                         print!("/{}", limit);
                                     } else {
                                         print!(";");
@@ -431,7 +427,7 @@ impl<'a> Autotuner<'a> {
                     }
 
                     // termination check
-                    if let Some(endure) = options.terminate.endure {
+                    if let Some(endure) = state.hyperparameters.terminate.endure {
                         print!("{}/{}\n", state.count, endure);
                         if state.count == endure {
                             break;
@@ -439,7 +435,7 @@ impl<'a> Autotuner<'a> {
                     }
 
                     state.generation += 1;
-                    if let Some(limit) = options.terminate.limit {
+                    if let Some(limit) = state.hyperparameters.terminate.limit {
                         if state.generation > limit {
                             break;
                         }
@@ -464,11 +460,11 @@ impl<'a> Autotuner<'a> {
                         Direction::Minimize => inverted.sort_by(|a, b| b.0.total_cmp(&a.0)),
                         Direction::Maximize => inverted.sort_by(|a, b| a.0.total_cmp(&b.0)),
                     }
-                    inverted.truncate(inverted.len() - options.remain);
+                    inverted.truncate(inverted.len() - state.hyperparameters.remain);
                     inverted.shuffle(&mut rng);
                     let mut holes = strategies::genetic::stochastic_universal_sampling(
                         &inverted,
-                        options.delete.value,
+                        state.hyperparameters.delete.value,
                     );
                     drop(inverted);
 
@@ -486,10 +482,10 @@ impl<'a> Autotuner<'a> {
                     evaluation_results.shuffle(&mut rng);
 
                     // generate & evaluate children
-                    let mut children = Vec::with_capacity(options.generate.value);
+                    let mut children = Vec::with_capacity(state.hyperparameters.generate.value);
                     temp_results.clear();
                     let mut index = 0;
-                    while index < options.generate.value {
+                    while index < state.hyperparameters.generate.value {
                         let result = strategies::genetic::stochastic_universal_sampling(
                             &evaluation_results,
                             2,
@@ -501,7 +497,7 @@ impl<'a> Autotuner<'a> {
                         );
                         strategies::genetic::mutate(
                             &self.configuration.profile,
-                            &options.mutate,
+                            &state.hyperparameters.mutate,
                             &mut child,
                         );
 
@@ -509,12 +505,17 @@ impl<'a> Autotuner<'a> {
                             let result = self.evaluate(&child, repetition);
                             if result.is_finite() || log_level >= LogLevel::Normal {
                                 print!("{}", state.generation);
-                                if let Some(limit) = options.terminate.limit {
+                                if let Some(limit) = state.hyperparameters.terminate.limit {
                                     print!("/{}", limit);
                                 } else {
                                     print!(";");
                                 }
-                                print!(" {}/{}: {}", index + 1, options.generate.value, result);
+                                print!(
+                                    " {}/{}: {}",
+                                    index + 1,
+                                    state.hyperparameters.generate.value,
+                                    result
+                                );
                                 if result.is_finite() {
                                     if let Some(unit) = &self.configuration.unit {
                                         print!(" {}", unit);
@@ -533,10 +534,11 @@ impl<'a> Autotuner<'a> {
                             }
 
                             temp_results.insert(
-                                if index < options.delete.value {
+                                if index < state.hyperparameters.delete.value {
                                     holes[index]
                                 } else {
-                                    state.population.len() + index - options.delete.value
+                                    state.population.len() + index
+                                        - state.hyperparameters.delete.value
                                 },
                                 result,
                             );
@@ -547,7 +549,11 @@ impl<'a> Autotuner<'a> {
                     }
 
                     // replace individuals with children
-                    let min = options.generate.value.min(options.delete.value);
+                    let min = state
+                        .hyperparameters
+                        .generate
+                        .value
+                        .min(state.hyperparameters.delete.value);
                     let generated = children.split_off(min);
                     let mut deleted = holes.split_off(min);
                     assert!(generated.is_empty() || deleted.is_empty());
@@ -567,13 +573,13 @@ impl<'a> Autotuner<'a> {
                         }
                     }
 
-                    for _ in 0..options.infuse.value {
+                    for _ in 0..state.hyperparameters.infuse.value {
                         state
                             .population
                             .push(Arc::new(Individual::random(&self.configuration.profile)));
                     }
 
-                    options.step();
+                    state.step();
                 }
 
                 if *is_canceled {
