@@ -22,7 +22,7 @@ pub(crate) trait Log {
 impl Log for (Arc<Individual>, f64) {
     fn log(&self, profile: &Profile) -> ExecutionLog {
         let (individual, value) = self;
-        ExecutionLog(profile.stringify(individual), *value)
+        ExecutionLog(profile.individual_to_string(individual), *value)
     }
 }
 

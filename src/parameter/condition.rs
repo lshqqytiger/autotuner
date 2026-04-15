@@ -1,5 +1,5 @@
 use crate::{
-    parameter::{Combination, Value},
+    parameter::{Combination, Value, space},
     utils::interner::Intern,
 };
 use serde::Deserialize;
@@ -33,6 +33,40 @@ pub(crate) enum Integer {
 }
 
 impl Integer {
+    pub(crate) fn next(
+        &self,
+        space: &space::Integer,
+        combination: &Combination,
+        value: u32,
+    ) -> Option<u32> {
+        if let space::Integer::Sequence(_, end) = space {
+            match self {
+                Integer::MultipleOf(object) => {
+                    let b = object.resolve(combination);
+                    if let Value::Integer(b) = b {
+                        if value + b <= *end {
+                            Some(value + b)
+                        } else {
+                            None
+                        }
+                    } else {
+                        unreachable!()
+                    }
+                }
+                Integer::LessOrEqualTo(object) => {
+                    let b = if let Value::Integer(b) = object.resolve(combination) {
+                        b.min(*end)
+                    } else {
+                        unreachable!()
+                    };
+                    if value < b { Some(value + 1) } else { None }
+                }
+            }
+        } else {
+            unreachable!()
+        }
+    }
+
     pub(crate) fn adjust(&self, name: &str, combination: &mut Combination) {
         match self {
             Integer::MultipleOf(object) => {

@@ -35,11 +35,7 @@ impl Serialize for Individual {
     where
         S: serde::Serializer,
     {
-        let mut pairs = Vec::new();
-        for (name, code) in &self.parameters {
-            pairs.push((name.to_string(), code));
-        }
-        pairs.serialize(serializer)
+        self.parameters.serialize(serializer)
     }
 }
 
@@ -48,9 +44,9 @@ impl<'de> Deserialize<'de> for Individual {
     where
         D: serde::Deserializer<'de>,
     {
-        let pairs = Vec::<(String, Value)>::deserialize(deserializer)?;
+        let deserialized = BTreeMap::<String, Value>::deserialize(deserializer)?;
         let mut parameters = BTreeMap::new();
-        for (name, code) in pairs {
+        for (name, code) in deserialized {
             parameters.insert(name.intern(), code);
         }
         Ok(Individual::new(parameters))

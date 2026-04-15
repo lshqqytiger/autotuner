@@ -28,8 +28,10 @@ fn default_infuse() -> Usize {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct Hyperparameters {
+    #[serde(default)]
+    pub(crate) initial: Option<String>,
     #[serde(default = "default_initial")]
-    pub(crate) initial: usize,
+    pub(crate) initial_population: usize,
     #[serde(default = "default_remain")]
     pub(crate) remain: usize,
     #[serde(default = "default_generate")]
@@ -113,6 +115,8 @@ pub(crate) struct KeywordMutation {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct Termination {
+    #[serde(default)]
+    pub(crate) goal: Option<f64>,
     #[serde(default)]
     pub(crate) limit: Option<usize>,
     #[serde(default)]

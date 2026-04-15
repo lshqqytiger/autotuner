@@ -127,7 +127,7 @@ impl<'a> Autotuner<'a> {
         match &configuration.strategy {
             strategies::Strategy::Exhaustive(_) => {}
             strategies::Strategy::Genetic(options) => {
-                if options.hyperparameters.initial <= 1 {
+                if options.hyperparameters.initial_population <= 1 {
                     return Err(anyhow!("Initial population size must be greater than 1"));
                 }
                 if options.hyperparameters.generate.value == 0 {
@@ -206,7 +206,7 @@ impl<'a> Autotuner<'a> {
         };
 
         let output = match &self.configuration.strategy {
-            strategies::Strategy::Exhaustive(options) => {
+            strategies::Strategy::Exhaustive(_) => {
                 let mut ranking = strategies::exhaustive::output::Ranking::new(
                     self.configuration.direction,
                     candidates,
@@ -217,100 +217,35 @@ impl<'a> Autotuner<'a> {
                     strategies::exhaustive::state::State::new(&self.configuration.profile)
                 };
 
-                if options.iterative {
-                    let mut individual = Individual::random(&self.configuration.profile);
-                    for i in 0..options.repeat {
-                        println!("{}", self.configuration.profile.stringify(&individual));
-                        for (name, specification) in self.configuration.profile.0.iter() {
-                            let space = specification.get_space();
-
-                            let mut best = (space.first(), self.configuration.direction.worst());
-                            individual.parameters.insert(name.clone(), best.0);
-
-                            loop {
-                                guard!(SIGQUIT, {
-                                    let result = self.evaluate(&individual, repetition);
-                                    if result.is_finite() || log_level >= LogLevel::Normal {
-                                        print!("{}/{}: {}", i, options.repeat, result);
-                                        if result.is_finite() {
-                                            if let Some(unit) = &self.configuration.unit {
-                                                print!(" {}", unit);
-                                            }
-                                        }
-                                        println!();
-                                        if log_level >= LogLevel::Verbose {
-                                            println!(
-                                                "{}={}",
-                                                name,
-                                                specification
-                                                    .stringify(individual.parameters[name])
-                                            );
-                                        }
-                                        println!();
-                                    }
-
-                                    if self.configuration.direction.compare(result, best.1).is_gt()
-                                    {
-                                        best = (individual.parameters[name], result);
-                                    }
-
-                                    ranking.push(individual.clone(), result);
-                                });
-
-                                if *is_canceled {
-                                    break;
-                                }
-
-                                if let Some(next) = space.next(individual.parameters[name]) {
-                                    individual.parameters.insert(name.clone(), next);
-                                } else {
-                                    break;
+                let mut count = 1;
+                while let Some(individual) = state.next(&self.configuration.profile) {
+                    guard!(SIGQUIT, {
+                        let result = self.evaluate(&individual, repetition);
+                        if result.is_finite() || log_level >= LogLevel::Normal {
+                            print!("{}/{}: {}", count, self.configuration.profile.len(), result);
+                            if result.is_finite() {
+                                if let Some(unit) = &self.configuration.unit {
+                                    print!(" {}", unit);
                                 }
                             }
-
-                            individual.parameters.insert(name.clone(), best.0);
-                        }
-
-                        if *is_canceled {
-                            break;
-                        }
-                    }
-                } else {
-                    let mut count = 1;
-                    while let Some(individual) = state.next(&self.configuration.profile) {
-                        guard!(SIGQUIT, {
-                            let result = self.evaluate(&individual, repetition);
-                            if result.is_finite() || log_level >= LogLevel::Normal {
-                                print!(
-                                    "{}/{}: {}",
-                                    count,
-                                    self.configuration.profile.len(),
-                                    result
+                            println!();
+                            if log_level >= LogLevel::Verbose {
+                                println!(
+                                    "{}",
+                                    self.configuration.profile.individual_to_string(&individual)
                                 );
-                                if result.is_finite() {
-                                    if let Some(unit) = &self.configuration.unit {
-                                        print!(" {}", unit);
-                                    }
-                                }
-                                println!();
-                                if log_level >= LogLevel::Verbose {
-                                    println!(
-                                        "{}",
-                                        self.configuration.profile.stringify(&individual)
-                                    );
-                                }
-                                println!();
                             }
-
-                            ranking.push(individual, result);
-                        });
-
-                        if *is_canceled {
-                            break;
+                            println!();
                         }
 
-                        count += 1;
+                        ranking.push(individual, result);
+                    });
+
+                    if *is_canceled {
+                        break;
                     }
+
+                    count += 1;
                 }
 
                 if *is_canceled {
@@ -366,7 +301,7 @@ impl<'a> Autotuner<'a> {
                                             "{}",
                                             self.configuration
                                                 .profile
-                                                .stringify(&state.population[index])
+                                                .individual_to_string(&state.population[index])
                                         );
                                     }
                                     println!();
@@ -427,17 +362,28 @@ impl<'a> Autotuner<'a> {
                     }
 
                     // termination check
-                    if let Some(endure) = state.hyperparameters.terminate.endure {
-                        print!("{}/{}\n", state.count, endure);
-                        if state.count == endure {
-                            break;
+                    if let Some(goal) = state.hyperparameters.terminate.goal {
+                        if self
+                            .configuration
+                            .direction
+                            .compare(best_overall, goal)
+                            .is_ge()
+                        {
+                            state.hyperparameters.terminate.goal = None;
                         }
-                    }
+                    } else {
+                        state.generation += 1;
+                        if let Some(limit) = state.hyperparameters.terminate.limit {
+                            if state.generation > limit {
+                                break;
+                            }
+                        }
 
-                    state.generation += 1;
-                    if let Some(limit) = state.hyperparameters.terminate.limit {
-                        if state.generation > limit {
-                            break;
+                        if let Some(endure) = state.hyperparameters.terminate.endure {
+                            print!("{}/{}\n", state.count, endure);
+                            if state.count == endure {
+                                break;
+                            }
                         }
                     }
 
@@ -523,7 +469,10 @@ impl<'a> Autotuner<'a> {
                                 }
                                 println!();
                                 if log_level >= LogLevel::Verbose {
-                                    println!("{}", self.configuration.profile.stringify(&child));
+                                    println!(
+                                        "{}",
+                                        self.configuration.profile.individual_to_string(&child)
+                                    );
                                 }
                                 println!();
                             }

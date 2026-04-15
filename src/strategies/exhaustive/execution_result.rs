@@ -29,6 +29,6 @@ impl Ord for ExecutionResult {
 
 impl IntoLog for ExecutionResult {
     fn into_log(self, profile: &Profile) -> ExecutionLog {
-        ExecutionLog(profile.stringify(&self.0), self.1)
+        ExecutionLog(profile.individual_to_string(&self.0), self.1)
     }
 }

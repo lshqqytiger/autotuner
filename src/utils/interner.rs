@@ -40,3 +40,10 @@ impl<'a> Intern for Cow<'a, str> {
         interner.intern(self)
     }
 }
+
+impl Intern for &str {
+    fn intern(&self) -> Arc<str> {
+        let interner = &mut *INTERNER.lock().unwrap();
+        interner.intern(self)
+    }
+}

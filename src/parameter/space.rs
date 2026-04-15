@@ -26,26 +26,6 @@ impl Space for Integer {
         }
     }
 
-    fn next(&self, current: Value) -> Option<Value> {
-        match (self, current) {
-            (Integer::Sequence(_, end), Value::Integer(n)) => {
-                if n + 1 <= *end {
-                    Some(Value::Integer(n + 1))
-                } else {
-                    None
-                }
-            }
-            (Integer::Candidates(candidates), Value::Index(i)) => {
-                if i + 1 < candidates.len() {
-                    Some(Value::Index(i + 1))
-                } else {
-                    None
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-
     fn adjust(&self, value: &mut Value) {
         match (self, value) {
             (Integer::Sequence(start, end), Value::Integer(n)) => {
@@ -82,19 +62,6 @@ impl Space for Switch {
         Value::Switch(rand::random())
     }
 
-    fn next(&self, current: Value) -> Option<Value> {
-        match current {
-            Value::Switch(b) => {
-                if !b {
-                    Some(Value::Switch(true))
-                } else {
-                    None
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-
     #[inline]
     fn len(&self) -> usize {
         2
@@ -113,19 +80,6 @@ impl Space for Keyword {
     #[inline]
     fn random(&self) -> Value {
         Value::Index(rand::random_range(0..self.0.len()))
-    }
-
-    fn next(&self, current: Value) -> Option<Value> {
-        match current {
-            Value::Index(i) => {
-                if i + 1 < self.0.len() {
-                    Some(Value::Index(i + 1))
-                } else {
-                    None
-                }
-            }
-            _ => unreachable!(),
-        }
     }
 
     #[inline]
