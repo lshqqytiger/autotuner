@@ -362,6 +362,13 @@ impl<'a> Autotuner<'a> {
                     }
 
                     // termination check
+                    state.generation += 1;
+                    if let Some(limit) = state.hyperparameters.terminate.limit {
+                        if state.generation > limit {
+                            break;
+                        }
+                    }
+
                     if let Some(goal) = state.hyperparameters.terminate.goal {
                         if self
                             .configuration
@@ -371,19 +378,10 @@ impl<'a> Autotuner<'a> {
                         {
                             state.hyperparameters.terminate.goal = None;
                         }
-                    } else {
-                        state.generation += 1;
-                        if let Some(limit) = state.hyperparameters.terminate.limit {
-                            if state.generation > limit {
-                                break;
-                            }
-                        }
-
-                        if let Some(endure) = state.hyperparameters.terminate.endure {
-                            print!("{}/{}\n", state.count, endure);
-                            if state.count == endure {
-                                break;
-                            }
+                    } else if let Some(endure) = state.hyperparameters.terminate.endure {
+                        print!("{}/{}\n", state.count, endure);
+                        if state.count == endure {
+                            break;
                         }
                     }
 
