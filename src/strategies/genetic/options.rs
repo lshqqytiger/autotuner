@@ -81,13 +81,8 @@ impl Mutation {
     }
 }
 
-fn default_integer_mutation_probability() -> Real {
-    0.1.into()
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct IntegerMutation {
-    #[serde(default = "default_integer_mutation_probability")]
     pub(crate) probability: Real,
     #[serde(default)]
     pub(crate) variation: Option<Real>,
@@ -99,17 +94,11 @@ fn default_switch_mutation_probability() -> Real {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct SwitchMutation {
-    #[serde(default = "default_switch_mutation_probability")]
     pub(crate) probability: Real,
-}
-
-fn default_keyword_mutation_probability() -> Real {
-    0.1.into()
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct KeywordMutation {
-    #[serde(default = "default_keyword_mutation_probability")]
     pub(crate) probability: Real,
 }
 
