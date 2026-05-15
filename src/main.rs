@@ -13,7 +13,7 @@ mod utils;
 mod workspace;
 
 use crate::{
-    configuration::Configuration,
+    configuration::{Configuration, StopAction},
     context::Context,
     direction::Direction,
     helper::Helper,
@@ -196,12 +196,12 @@ impl<'a> Autotuner<'a> {
         checkpoint: Option<Checkpoint>,
         log_level: LogLevel,
     ) -> Union<serde_json::Value, Checkpoint> {
-        let is_canceled = ManuallyMove::new(false);
+        let is_signaled = ManuallyMove::new(false);
         let sigquit_handler = unsafe {
-            let is_canceled = is_canceled.clone();
+            let is_signaled = is_signaled.clone();
             register(SIGQUIT, move || {
-                let mut is_canceled = is_canceled.mov();
-                *is_canceled = true;
+                let mut is_signaled = is_signaled.mov();
+                *is_signaled = true;
             })
         };
 
@@ -241,14 +241,14 @@ impl<'a> Autotuner<'a> {
                         ranking.push(individual, result);
                     });
 
-                    if *is_canceled {
+                    if *is_signaled {
                         break;
                     }
 
                     count += 1;
                 }
 
-                if *is_canceled {
+                if *is_signaled && self.configuration.stop_action == StopAction::SaveState {
                     second!(state.into())
                 } else {
                     first!(ranking.into_json(&self.configuration.profile))
@@ -321,12 +321,12 @@ impl<'a> Autotuner<'a> {
                             index += 1;
                         });
 
-                        if *is_canceled {
+                        if *is_signaled {
                             break;
                         }
                     }
 
-                    if *is_canceled {
+                    if *is_signaled {
                         break;
                     }
 
@@ -529,7 +529,7 @@ impl<'a> Autotuner<'a> {
                     state.step();
                 }
 
-                if *is_canceled {
+                if *is_signaled && self.configuration.stop_action == StopAction::SaveState {
                     second!(state.into())
                 } else {
                     first!(output.into_json(&self.configuration.profile))
@@ -537,7 +537,7 @@ impl<'a> Autotuner<'a> {
             }
         };
 
-        ManuallyMove::drop(is_canceled);
+        ManuallyMove::drop(is_signaled);
 
         if let Ok(sigquit_handler) = sigquit_handler {
             unregister(sigquit_handler);

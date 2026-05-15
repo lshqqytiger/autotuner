@@ -88,10 +88,6 @@ pub(crate) struct IntegerMutation {
     pub(crate) variation: Option<Real>,
 }
 
-fn default_switch_mutation_probability() -> Real {
-    0.1.into()
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct SwitchMutation {
     pub(crate) probability: Real,
