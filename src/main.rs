@@ -18,9 +18,9 @@ use crate::{
     direction::Direction,
     helper::Helper,
     hook::Hook,
-    individual::Individual,
+    individual::{Fitness, Individual, Representative},
     runner::Runner,
-    strategies::{Checkpoint, execution_log::Log, output::IntoJson},
+    strategies::{Checkpoint, output::IntoJson},
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
@@ -30,7 +30,7 @@ use libc::{SIGQUIT, SIGSEGV};
 use libloading::Library;
 use rand::seq::SliceRandom;
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, hint, process, sync::Arc, time::SystemTime};
+use std::{fs, hint, process, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -207,52 +207,7 @@ impl<'a> Autotuner<'a> {
 
         let output = match &self.configuration.strategy {
             strategies::Strategy::Exhaustive(_) => {
-                let mut ranking = strategies::exhaustive::output::Ranking::new(
-                    self.configuration.direction,
-                    candidates,
-                );
-                let mut state = if let Some(Checkpoint::Exhaustive(state)) = checkpoint {
-                    state
-                } else {
-                    strategies::exhaustive::state::State::new(&self.configuration.profile)
-                };
-
-                let mut count = 1;
-                while let Some(individual) = state.next(&self.configuration.profile) {
-                    guard!(SIGQUIT, {
-                        let result = self.evaluate(&individual, repetition);
-                        if result.is_finite() || log_level >= LogLevel::Normal {
-                            print!("{}/{}: {}", count, self.configuration.profile.len(), result);
-                            if result.is_finite() {
-                                if let Some(unit) = &self.configuration.unit {
-                                    print!(" {}", unit);
-                                }
-                            }
-                            println!();
-                            if log_level >= LogLevel::Verbose {
-                                println!(
-                                    "{}",
-                                    self.configuration.profile.individual_to_string(&individual)
-                                );
-                            }
-                            println!();
-                        }
-
-                        ranking.push(individual, result);
-                    });
-
-                    if *is_signaled {
-                        break;
-                    }
-
-                    count += 1;
-                }
-
-                if *is_signaled && self.configuration.stop_action == StopAction::SaveState {
-                    second!(state.into())
-                } else {
-                    first!(ranking.into_json(&self.configuration.profile))
-                }
+                todo!()
             }
             strategies::Strategy::Genetic(options) => {
                 let mut output = strategies::genetic::output::Output::new(
@@ -281,16 +236,17 @@ impl<'a> Autotuner<'a> {
                             let result = if let Some(&result) = temp_results.get(&index) {
                                 result
                             } else {
-                                let result = self.evaluate(&state.population[index], repetition);
-                                if result.is_finite() || log_level >= LogLevel::Normal {
+                                let individual = &mut state.population[index];
+                                self.evaluate(individual, repetition);
+                                if individual.fitness.is_valid() || log_level >= LogLevel::Normal {
                                     print!("{}", state.generation);
                                     if let Some(limit) = state.hyperparameters.terminate.limit {
                                         print!("/{}", limit);
                                     } else {
                                         print!(";");
                                     }
-                                    print!(" {}/{}: {}", index + 1, len, result);
-                                    if result.is_finite() {
+                                    print!(" {}/{}: {}", index + 1, len, individual.fitness);
+                                    if individual.fitness.is_valid() {
                                         if let Some(unit) = &self.configuration.unit {
                                             print!(" {}", unit);
                                         }
@@ -301,22 +257,23 @@ impl<'a> Autotuner<'a> {
                                             "{}",
                                             self.configuration
                                                 .profile
-                                                .individual_to_string(&state.population[index])
+                                                .individual_to_string(individual)
                                         );
                                     }
                                     println!();
                                 }
 
-                                result
+                                individual.fitness
                             };
 
-                            if state.generation == 1 && result.is_infinite() {
+                            if state.generation == 1 && state.population[index].fitness.is_invalid()
+                            {
                                 state.population[index] =
-                                    Arc::new(Individual::random(&self.configuration.profile));
+                                    Individual::random(&self.configuration.profile);
                                 continue;
                             }
 
-                            output.ranking.push(state.population[index].clone(), result);
+                            output.ranking.push(&state.population[index]);
                             evaluation_results.push((result, index));
                             index += 1;
                         });
@@ -330,18 +287,18 @@ impl<'a> Autotuner<'a> {
                         break;
                     }
 
-                    // record generation summary
-                    let iter = evaluation_results
+                    let mut flattened = evaluation_results
                         .iter()
-                        .map(|(x, _)| *x)
-                        .filter(|x| x.is_finite());
+                        .map(|(fitness, index)| {
+                            (fitness.into_f64(self.configuration.criterion), *index)
+                        })
+                        .collect::<Vec<_>>();
+
+                    // record generation summary
+                    let iter = flattened.iter().map(|(x, _)| *x).filter(|x| x.is_finite());
                     let boundaries = self.configuration.direction.boundaries(iter);
                     let summary = strategies::genetic::GenerationSummary::new(
-                        output
-                            .ranking
-                            .best()
-                            .map(|x| x.log(&self.configuration.profile))
-                            .unwrap(),
+                        output.ranking.best().unwrap(),
                         boundaries,
                     );
                     println!("=== Generation #{} Summary ===", state.generation);
@@ -388,7 +345,7 @@ impl<'a> Autotuner<'a> {
                     println!();
 
                     // select individuals to remove
-                    let mut inverted = evaluation_results.clone();
+                    let mut inverted = flattened.clone();
                     for pair in &mut inverted {
                         if pair.0.is_infinite() {
                             pair.0 = worst;
@@ -412,7 +369,7 @@ impl<'a> Autotuner<'a> {
                     );
                     drop(inverted);
 
-                    for result in &mut evaluation_results {
+                    for result in &mut flattened {
                         if result.0.is_infinite() {
                             result.0 = best;
                             continue;
@@ -423,17 +380,15 @@ impl<'a> Autotuner<'a> {
                             Direction::Maximize => result.0,
                         };
                     }
-                    evaluation_results.shuffle(&mut rng);
+                    flattened.shuffle(&mut rng);
 
                     // generate & evaluate children
                     let mut children = Vec::with_capacity(state.hyperparameters.generate.value);
                     temp_results.clear();
                     let mut index = 0;
                     while index < state.hyperparameters.generate.value {
-                        let result = strategies::genetic::stochastic_universal_sampling(
-                            &evaluation_results,
-                            2,
-                        );
+                        let result =
+                            strategies::genetic::stochastic_universal_sampling(&flattened, 2);
                         let mut child = strategies::genetic::crossover(
                             &self.configuration.profile,
                             &state.population[result[0]],
@@ -446,8 +401,8 @@ impl<'a> Autotuner<'a> {
                         );
 
                         guard!(SIGQUIT, {
-                            let result = self.evaluate(&child, repetition);
-                            if result.is_finite() || log_level >= LogLevel::Normal {
+                            self.evaluate(&mut child, repetition);
+                            if child.fitness.is_valid() || log_level >= LogLevel::Normal {
                                 print!("{}", state.generation);
                                 if let Some(limit) = state.hyperparameters.terminate.limit {
                                     print!("/{}", limit);
@@ -458,9 +413,9 @@ impl<'a> Autotuner<'a> {
                                     " {}/{}: {}",
                                     index + 1,
                                     state.hyperparameters.generate.value,
-                                    result
+                                    child.fitness
                                 );
-                                if result.is_finite() {
+                                if child.fitness.is_valid() {
                                     if let Some(unit) = &self.configuration.unit {
                                         print!(" {}", unit);
                                     }
@@ -476,7 +431,7 @@ impl<'a> Autotuner<'a> {
                             }
 
                             // retry
-                            if result.is_infinite() {
+                            if child.fitness.is_invalid() {
                                 continue;
                             }
 
@@ -487,7 +442,7 @@ impl<'a> Autotuner<'a> {
                                     state.population.len() + index
                                         - state.hyperparameters.delete.value
                                 },
-                                result,
+                                child.fitness,
                             );
                         });
 
@@ -505,11 +460,11 @@ impl<'a> Autotuner<'a> {
                     let mut deleted = holes.split_off(min);
                     assert!(generated.is_empty() || deleted.is_empty());
                     for (index, child) in children.into_iter().enumerate() {
-                        state.population[holes[index]] = Arc::new(child);
+                        state.population[holes[index]] = child;
                     }
                     if !generated.is_empty() {
                         for child in generated.into_iter() {
-                            state.population.push(Arc::new(child));
+                            state.population.push(child);
                         }
                     }
                     if !deleted.is_empty() {
@@ -523,7 +478,7 @@ impl<'a> Autotuner<'a> {
                     for _ in 0..state.hyperparameters.infuse.value {
                         state
                             .population
-                            .push(Arc::new(Individual::random(&self.configuration.profile)));
+                            .push(Individual::random(&self.configuration.profile));
                     }
 
                     state.step();
@@ -546,7 +501,7 @@ impl<'a> Autotuner<'a> {
         output
     }
 
-    fn evaluate(&self, individual: &Individual, repetition: usize) -> f64 {
+    fn evaluate(&self, individual: &mut Individual, repetition: usize) {
         let working_directory = self
             .temp_directory
             .path()
@@ -567,8 +522,8 @@ impl<'a> Autotuner<'a> {
                 task.call(&mut context, &self.workspace);
             }
         }
-        if let context::Result::Invalid = context.result {
-            return self.configuration.criterion.invalid();
+        if context.individual.fitness == Fitness::Invalid {
+            return;
         }
 
         let path = working_directory.join("lib.so");
@@ -607,17 +562,15 @@ impl<'a> Autotuner<'a> {
                     unregister(id);
                 }
             };
-            let fitness = context.result.unwrap(self.configuration.criterion);
-            if fitness.is_nan() {
+            if context.individual.fitness.is_nan() {
                 panic!("NaN value encountered");
             }
-            fitnesses.push(fitness);
+            fitnesses.push(context.individual.fitness);
         }
 
         drop(lib);
 
-        context.result =
-            context::Result::Valid(self.configuration.criterion.representative(fitnesses));
+        context.individual.fitness = fitnesses.representative(self.configuration.criterion);
 
         for name in &self.configuration.hooks.post {
             unsafe {
@@ -625,8 +578,6 @@ impl<'a> Autotuner<'a> {
                 task.call(&mut context, &self.workspace);
             }
         }
-
-        context.result.unwrap(self.configuration.criterion)
     }
 }
 

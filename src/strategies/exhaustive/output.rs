@@ -2,9 +2,7 @@ use crate::{
     direction::Direction,
     individual::Individual,
     parameter::Profile,
-    strategies::{
-        execution_log::IntoLog, exhaustive::execution_result::ExecutionResult, output::IntoJson,
-    },
+    strategies::{exhaustive::execution_result::ExecutionResult, output::IntoJson},
 };
 use std::{cmp, collections::BinaryHeap};
 
@@ -35,13 +33,7 @@ impl Ranking {
 
 impl IntoJson for Ranking {
     fn into_json(self, profile: &Profile) -> serde_json::Value {
-        let mut vec = self
-            .heap
-            .into_iter()
-            .map(|result| result.into_log(profile))
-            .collect::<Vec<_>>();
-        vec.reverse();
-        serde_json::to_value(vec).unwrap()
+        todo!()
     }
 }
 

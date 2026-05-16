@@ -1,8 +1,4 @@
-use crate::{
-    individual::Individual,
-    parameter::Profile,
-    strategies::execution_log::{ExecutionLog, IntoLog},
-};
+use crate::individual::Individual;
 use std::cmp;
 
 pub(crate) struct ExecutionResult(pub(crate) Individual, pub(crate) f64);
@@ -24,11 +20,5 @@ impl PartialOrd for ExecutionResult {
 impl Ord for ExecutionResult {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.1.total_cmp(&other.1)
-    }
-}
-
-impl IntoLog for ExecutionResult {
-    fn into_log(self, profile: &Profile) -> ExecutionLog {
-        ExecutionLog(profile.individual_to_string(&self.0), self.1)
     }
 }

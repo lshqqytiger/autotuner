@@ -5,14 +5,13 @@ use crate::{
 };
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct State {
     pub(crate) generation: usize,
     pub(crate) count: usize,
     pub(crate) hyperparameters: Hyperparameters,
-    pub(crate) population: Vec<Arc<Individual>>,
+    pub(crate) population: Vec<Individual>,
 }
 
 impl State {
@@ -21,12 +20,10 @@ impl State {
         let population = (0..options.hyperparameters.initial_population).into_par_iter();
         let population = if let Some(ref initial) = options.hyperparameters.initial {
             let individual = profile.string_to_individual(initial);
-            population
-                .map(|_| Arc::new(individual.clone()))
-                .collect::<Vec<_>>()
+            population.map(|_| individual.clone()).collect::<Vec<_>>()
         } else {
             population
-                .map(|_| Arc::new(Individual::random(profile)))
+                .map(|_| Individual::random(profile))
                 .collect::<Vec<_>>()
         };
 

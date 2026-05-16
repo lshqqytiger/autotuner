@@ -4,7 +4,6 @@ pub(crate) mod state;
 
 use crate::individual::Individual;
 use crate::parameter::{Profile, Space, Specification, Value, space};
-use crate::strategies::execution_log::ExecutionLog;
 use crate::strategies::genetic::options::Mutation;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use serde::Serialize;
@@ -131,7 +130,7 @@ impl GeneticSpace for space::Keyword {
 #[derive(Serialize)]
 pub(crate) struct GenerationSummary {
     pub(crate) timestamp: u64,
-    pub(crate) global_best: ExecutionLog,
+    pub(crate) global_best: Individual,
     pub(crate) current_best: f64,
     pub(crate) current_worst: f64,
 }
@@ -139,21 +138,19 @@ pub(crate) struct GenerationSummary {
 impl GenerationSummary {
     pub(crate) fn print(&self, unit: &Option<String>) {
         let unit = unit.as_deref().unwrap_or("");
-        println!("Best overall: {} {}", self.global_best.1, unit);
+        println!("Best overall: {} {}", self.global_best.fitness, unit);
         println!("Best: {} {}", self.current_best, unit);
         println!("Worst: {} {}", self.current_worst, unit);
     }
 }
 
 impl GenerationSummary {
-    pub(crate) fn new(
-        global_best: ExecutionLog,
-        (current_best, current_worst): (f64, f64),
-    ) -> Self {
+    pub(crate) fn new(global_best: &Individual, (current_best, current_worst): (f64, f64)) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
+        let global_best = global_best.clone();
         GenerationSummary {
             timestamp,
             global_best,

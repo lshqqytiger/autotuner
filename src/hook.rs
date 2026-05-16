@@ -1,5 +1,6 @@
 use crate::{
-    context::{self, Context},
+    context::Context,
+    individual::Fitness,
     parameter::{Specification, Value, space},
     utils::interner::Intern,
     workspace::Workspace,
@@ -121,7 +122,7 @@ extern "C" fn context_invalidate(ctx: *mut Context) {
     } else {
         return;
     };
-    ctx.result = context::Result::Invalid;
+    ctx.individual.fitness = Fitness::Invalid;
 }
 
 extern "C" fn context_append_argument(ctx: *mut Context, argument: *const ffi::c_char) {

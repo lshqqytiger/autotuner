@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod exhaustive;
 pub(crate) mod genetic;
 
-pub(crate) mod execution_log;
 pub(crate) mod options;
 pub(crate) mod output;
 

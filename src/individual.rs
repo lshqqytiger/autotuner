@@ -1,4 +1,5 @@
 use crate::{
+    criterion::Criterion,
     parameter::{Combination, Profile, Value},
     utils::interner::Intern,
 };
@@ -6,14 +7,108 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    fmt::Display,
     hash::{self, Hash},
     sync::Arc,
 };
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Fitness {
+    Valid(f64),
+    Invalid,
+    Unknown,
+}
+
+impl PartialOrd for Fitness {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Fitness::Valid(a), Fitness::Valid(b)) => a.partial_cmp(b),
+            _ => {
+                panic!("invalid comparison")
+            }
+        }
+    }
+}
+
+impl Display for Fitness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fitness::Valid(x) => write!(f, "{}", x),
+            Fitness::Invalid => write!(f, "invalid"),
+            Fitness::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+impl Fitness {
+    #[inline]
+    pub(crate) fn is_nan(&self) -> bool {
+        matches!(self, Fitness::Valid(x) if x.is_nan())
+    }
+
+    #[inline]
+    pub(crate) fn is_valid(&self) -> bool {
+        matches!(self, Fitness::Valid(_))
+    }
+
+    #[inline]
+    pub(crate) fn is_invalid(&self) -> bool {
+        matches!(self, Fitness::Invalid)
+    }
+
+    #[inline]
+    pub(crate) fn into_f64(self, criterion: Criterion) -> f64 {
+        match self {
+            Fitness::Valid(x) => x,
+            Fitness::Invalid => criterion.invalid(),
+            Fitness::Unknown => panic!("tried to get fitness of unevaluated individual"),
+        }
+    }
+}
+
+pub(crate) trait Representative<T> {
+    fn representative(&self, criterion: Criterion) -> T;
+}
+
+impl Representative<Fitness> for Vec<Fitness> {
+    fn representative(&self, criterion: Criterion) -> Fitness {
+        match criterion {
+            Criterion::Maximum => self.iter().fold(Fitness::Invalid, |a, b| match (a, b) {
+                (Fitness::Valid(x), Fitness::Valid(y)) => Fitness::Valid(x.max(*y)),
+                (Fitness::Valid(x), _) => Fitness::Valid(x),
+                (_, Fitness::Valid(y)) => Fitness::Valid(*y),
+                _ => Fitness::Invalid,
+            }),
+            Criterion::Minimum => self.iter().fold(Fitness::Invalid, |a, b| match (a, b) {
+                (Fitness::Valid(x), Fitness::Valid(y)) => Fitness::Valid(x.min(*y)),
+                (Fitness::Valid(x), _) => Fitness::Valid(x),
+                (_, Fitness::Valid(y)) => Fitness::Valid(*y),
+                _ => Fitness::Invalid,
+            }),
+            Criterion::Median => {
+                let mut values = self
+                    .iter()
+                    .filter_map(|f| match f {
+                        Fitness::Valid(x) => Some(*x),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if values.is_empty() {
+                    Fitness::Invalid
+                } else {
+                    values.sort_by(|a, b| a.total_cmp(b));
+                    Fitness::Valid(values[values.len() / 2])
+                }
+            }
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct Individual {
     pub(crate) id: Arc<str>,
     pub(crate) parameters: Combination,
+    pub(crate) fitness: Fitness,
 }
 
 impl Hash for Individual {
@@ -62,6 +157,7 @@ impl Individual {
                 .collect::<String>()
                 .intern(),
             parameters,
+            fitness: Fitness::Unknown,
         }
     }
 

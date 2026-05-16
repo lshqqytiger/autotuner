@@ -1,12 +1,8 @@
 use crate::{
     direction::Direction,
-    individual::Individual,
+    individual::{Fitness, Individual},
     parameter::Profile,
-    strategies::{
-        execution_log::{Log, SortBy},
-        genetic::GenerationSummary,
-        output::IntoJson,
-    },
+    strategies::{genetic::GenerationSummary, output::IntoJson},
 };
 use fxhash::FxHashMap;
 use std::sync::Arc;
@@ -40,85 +36,102 @@ impl IntoJson for Output {
 pub(crate) struct Ranking {
     direction: Direction,
     capacity: usize,
-    data: FxHashMap<Arc<Individual>, f64>,
-    best: Option<Arc<Individual>>,
-    worst: Option<Arc<Individual>>,
+    data: FxHashMap<Arc<str>, Individual>,
 }
 
 impl Ranking {
-    fn new(direction: Direction, capacity: usize) -> Self {
+    pub(crate) fn new(direction: Direction, capacity: usize) -> Self {
         Ranking {
             direction,
             capacity,
             data: FxHashMap::default(),
-            best: None,
-            worst: None,
         }
     }
 
-    pub(crate) fn push(&mut self, individual: Arc<Individual>, fitness: f64) {
-        if self.data.is_empty() {
-            self.best = Some(individual.clone());
-            self.worst = Some(individual.clone());
-            self.data.insert(individual, fitness);
-            return;
-        }
-
-        let worst = self.worst.as_ref().unwrap();
-        if self.data.len() == self.capacity
-            && self.direction.compare(fitness, self.data[worst]).is_le()
-        {
-            // reject if the new result is worse than the worst result in the ranking
-            return;
-        }
-
-        let previous = self.data.get(&individual);
-        if let Some(previous) = previous {
-            if self.direction.compare(fitness, *previous).is_le() {
-                // reject if the new result is worse than the previous result of the same individual
-                return;
-            }
-        }
-
-        let best = self.best.as_ref().unwrap();
-        if self.direction.compare(fitness, self.data[best]).is_gt() {
-            self.best = Some(individual.clone());
-        }
-        if self.data.len() == self.capacity {
-            self.data.remove(worst);
-            self.worst = Some(
-                self.data
-                    .iter()
-                    .min_by(|&(_, &a), &(_, &b)| self.direction.compare(a, b))
-                    .unwrap()
-                    .0
-                    .clone(),
-            );
-        } else {
-            if self.direction.compare(fitness, self.data[worst]).is_lt() {
-                self.worst = Some(individual.clone());
-            }
-        }
-
-        self.data.insert(individual, fitness);
+    fn better(&self, lhs: f64, rhs: f64) -> bool {
+        self.direction.compare(lhs, rhs).is_gt()
     }
 
-    #[inline]
-    pub(crate) fn best(&self) -> Option<(Arc<Individual>, f64)> {
-        self.best
-            .as_ref()
-            .map(|best| (best.clone(), self.data[best]))
+    fn worst_key(&self) -> Option<Arc<str>> {
+        self.data
+            .iter()
+            .filter_map(|(id, individual)| match individual.fitness {
+                Fitness::Valid(fitness) => Some((id, fitness)),
+                _ => None,
+            })
+            .min_by(|(_, lhs), (_, rhs)| self.direction.compare(*lhs, *rhs))
+            .map(|(id, _)| id.clone())
+    }
+
+    pub(crate) fn push(&mut self, individual: &Individual) {
+        if self.capacity == 0 {
+            return;
+        }
+
+        let direction = self.direction;
+
+        let fitness = match individual.fitness {
+            Fitness::Valid(fitness) => fitness,
+            _ => return,
+        };
+
+        if let Some(current) = self.data.get_mut(individual.id.as_ref()) {
+            if let Fitness::Valid(current_fitness) = current.fitness {
+                if direction.compare(fitness, current_fitness).is_gt() {
+                    *current = individual.clone();
+                }
+            }
+            return;
+        }
+
+        if self.data.len() < self.capacity {
+            self.data.insert(individual.id.clone(), individual.clone());
+            return;
+        }
+
+        if let Some(worst_id) = self.worst_key() {
+            let worst_fitness = match self.data.get(worst_id.as_ref()) {
+                Some(Individual {
+                    fitness: Fitness::Valid(fitness),
+                    ..
+                }) => *fitness,
+                _ => return,
+            };
+
+            if self.better(fitness, worst_fitness) {
+                self.data.remove(worst_id.as_ref());
+                self.data.insert(individual.id.clone(), individual.clone());
+            }
+        }
+    }
+
+    pub(crate) fn best(&self) -> Option<&Individual> {
+        self.data
+            .values()
+            .filter_map(|individual| match individual.fitness {
+                Fitness::Valid(fitness) => Some((individual, fitness)),
+                _ => None,
+            })
+            .max_by(|(_, lhs), (_, rhs)| self.direction.compare(*lhs, *rhs))
+            .map(|(individual, _)| individual)
     }
 }
 
 impl IntoJson for Ranking {
     fn into_json(self, profile: &Profile) -> serde_json::Value {
-        let mut vec = self
+        let mut ranking = self
             .data
-            .into_iter()
-            .map(|result| result.log(profile))
+            .into_values()
+            .filter_map(|individual| match individual.fitness {
+                Fitness::Valid(fitness) => {
+                    Some((profile.individual_to_string(&individual), fitness))
+                }
+                _ => None,
+            })
             .collect::<Vec<_>>();
-        vec.sort_by_direction(self.direction);
-        serde_json::to_value(vec).unwrap()
+
+        ranking.sort_by(|&(_, lhs), &(_, rhs)| self.direction.compare(rhs, lhs));
+
+        serde_json::to_value(ranking).unwrap()
     }
 }

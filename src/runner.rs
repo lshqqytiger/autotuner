@@ -78,5 +78,5 @@ extern "C" fn result(context: *mut Context, result: f64) {
     } else {
         return;
     };
-    ctx.result = crate::context::Result::Valid(result);
+    ctx.individual.fitness = crate::individual::Fitness::Valid(result);
 }
