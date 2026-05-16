@@ -125,7 +125,6 @@ impl<'a> Autotuner<'a> {
         cores: &Option<Vec<usize>>,
     ) -> anyhow::Result<Self> {
         match &configuration.strategy {
-            strategies::Strategy::Exhaustive(_) => {}
             strategies::Strategy::Genetic(options) => {
                 if options.hyperparameters.initial_population <= 1 {
                     return Err(anyhow!("Initial population size must be greater than 1"));
@@ -206,9 +205,6 @@ impl<'a> Autotuner<'a> {
         };
 
         let output = match &self.configuration.strategy {
-            strategies::Strategy::Exhaustive(_) => {
-                todo!()
-            }
             strategies::Strategy::Genetic(options) => {
                 let mut output = strategies::genetic::output::Output::new(
                     self.configuration.direction,

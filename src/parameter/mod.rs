@@ -8,10 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) trait Space {
-    fn first(&self) -> Value;
     fn random(&self) -> Value;
     fn adjust(&self, _: &mut Value) {}
-    fn len(&self) -> usize;
 }
 
 #[derive(Deserialize)]
@@ -37,64 +35,6 @@ impl Specification {
             } => space,
             Specification::Switch => &Self::SWITCH_SPACE,
             Specification::Keyword(options) => options,
-        }
-    }
-
-    fn next(&self, combination: &Combination, current: Value) -> Option<Value> {
-        match (self, current) {
-            (
-                Self::Integer {
-                    space: space::Integer::Sequence(_, end),
-                    condition: None,
-                },
-                Value::Integer(n),
-            ) => {
-                if n + 1 <= *end {
-                    Some(Value::Integer(n + 1))
-                } else {
-                    None
-                }
-            }
-            (
-                Self::Integer {
-                    space,
-                    condition: Some(condition),
-                },
-                Value::Integer(n),
-            ) => condition
-                .next(&space, combination, n)
-                .map(|x| Value::Integer(x)),
-            (
-                Self::Integer {
-                    space: space::Integer::Candidates(candidates),
-                    condition: None,
-                },
-                Value::Index(i),
-            ) => {
-                if i + 1 < candidates.len() {
-                    Some(Value::Index(i + 1))
-                } else {
-                    None
-                }
-            }
-
-            (Self::Switch, Value::Switch(b)) => {
-                if !b {
-                    Some(Value::Switch(true))
-                } else {
-                    None
-                }
-            }
-
-            (Self::Keyword(space::Keyword(options)), Value::Index(i)) => {
-                if i + 1 < options.len() {
-                    Some(Value::Index(i + 1))
-                } else {
-                    None
-                }
-            }
-
-            _ => unimplemented!(),
         }
     }
 
@@ -152,10 +92,6 @@ impl Specification {
 pub(crate) struct Profile(pub(crate) BTreeMap<Arc<str>, Arc<Specification>>);
 
 impl Profile {
-    pub(crate) fn next(&self, name: &str, combination: &Combination) -> Option<Value> {
-        self.0[name].next(combination, combination[name])
-    }
-
     fn adjust_by(&self, name: &str, combination: &mut Combination) {
         match self.0[name].as_ref() {
             Specification::Integer {
@@ -198,14 +134,6 @@ impl Profile {
             })
             .collect::<BTreeMap<Arc<str>, Value>>();
         Individual::new(parameters)
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        let mut size = 1;
-        for specification in self.0.values() {
-            size *= specification.get_space().len();
-        }
-        size
     }
 }
 
