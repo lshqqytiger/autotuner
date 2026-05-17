@@ -7,8 +7,10 @@ mod genetic;
 mod helper;
 mod hook;
 mod individual;
+mod output;
 mod parameter;
 mod runner;
+mod state;
 mod utils;
 mod workspace;
 
@@ -16,10 +18,10 @@ use crate::{
     configuration::{Configuration, StopAction},
     context::Context,
     direction::Direction,
-    genetic::output::IntoJson,
     helper::Helper,
     hook::Hook,
     individual::{Fitness, Individual, Representative},
+    output::IntoJson,
     runner::Runner,
     utils::{manually_move::ManuallyMove, union::Union},
 };
@@ -188,9 +190,9 @@ impl<'a> Autotuner<'a> {
         &'a self,
         repetition: usize,
         candidates: usize,
-        checkpoint: Option<genetic::state::State>,
+        checkpoint: Option<state::State>,
         log_level: LogLevel,
-    ) -> Union<serde_json::Value, genetic::state::State> {
+    ) -> Union<serde_json::Value, state::State> {
         let is_signaled = ManuallyMove::new(false);
         let sigquit_handler = unsafe {
             let is_signaled = is_signaled.clone();
@@ -201,11 +203,11 @@ impl<'a> Autotuner<'a> {
         };
 
         let output = {
-            let mut output = genetic::output::Output::new(self.configuration.direction, candidates);
+            let mut output = output::Output::new(self.configuration.direction, candidates);
             let mut state = if let Some(state) = checkpoint {
                 state
             } else {
-                genetic::state::State::new(
+                state::State::new(
                     &self.configuration.hyperparameters,
                     &self.configuration.profile,
                 )
@@ -588,8 +590,7 @@ fn main() -> anyhow::Result<()> {
     )?;
     let state = args.continue_.as_ref().map(|filename| {
         let content = fs::read_to_string(filename).expect("Failed to read checkpoint file");
-        serde_json::from_str::<genetic::state::State>(&content)
-            .expect("Failed to parse checkpoint file")
+        serde_json::from_str::<state::State>(&content).expect("Failed to parse checkpoint file")
     });
     match_union!(
         autotuner.run(

@@ -1,6 +1,3 @@
-pub(crate) mod output;
-pub(crate) mod state;
-
 use crate::configuration::Mutation;
 use crate::individual::Individual;
 use crate::parameter::Profile;
