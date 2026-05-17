@@ -1,7 +1,7 @@
 use crate::{
     criterion::Criterion,
     direction::Direction,
-    helper, hook,
+    ffi::{helper, hook},
     parameter::Profile,
     utils::scaling::{Real, Usize},
 };

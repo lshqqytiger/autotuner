@@ -1,9 +1,8 @@
 use crate::{
-    context::Context,
+    ffi::context::Context,
     individual::Fitness,
     parameter::{Specification, Value, space},
     utils::interner::Intern,
-    workspace::Workspace,
 };
 use libloading::Symbol;
 use serde::{Deserialize, Serialize};
@@ -26,7 +25,6 @@ impl Default for Configuration {
 
 type Function = unsafe extern "C" fn(
     ctx: *mut Context,
-    ws: *const Workspace,
     get: extern "C" fn(id: ffi::c_int) -> *const ffi::c_void,
 );
 
@@ -39,24 +37,23 @@ impl<'a> From<Symbol<'a, Function>> for Hook<'a> {
 }
 
 impl<'a> Hook<'a> {
-    pub(crate) fn call(&self, context: &mut Context, workspace: &Workspace) {
+    pub(crate) fn call(&self, context: &mut Context) {
         unsafe {
-            self.0(context as _, workspace as _, get as _);
+            self.0(context as _, get as _);
         }
     }
 }
 
 #[repr(u32)]
 enum Interface {
-    ContextGetWorkingDirectory = 0x00,
-    ContextInvalidate = 0x01,
-    ContextAppendArgument = 0x02,
+    GetWorkingDirectory = 0x00,
+    GetPtr = 0x01,
+    Invalidate = 0x02,
+    AppendArgument = 0x03,
 
     ParameterGetInteger = 0x10,
     ParameterGetSwitch = 0x11,
     ParameterGetKeyword = 0x12,
-
-    WorkspaceGetPtr = 0x20,
 }
 
 impl TryFrom<ffi::c_int> for Interface {
@@ -64,15 +61,12 @@ impl TryFrom<ffi::c_int> for Interface {
 
     fn try_from(value: ffi::c_int) -> Result<Self, Self::Error> {
         match value {
-            x if x == Interface::ContextGetWorkingDirectory as ffi::c_int => {
-                Ok(Interface::ContextGetWorkingDirectory)
+            x if x == Interface::GetWorkingDirectory as ffi::c_int => {
+                Ok(Interface::GetWorkingDirectory)
             }
-            x if x == Interface::ContextInvalidate as ffi::c_int => {
-                Ok(Interface::ContextInvalidate)
-            }
-            x if x == Interface::ContextAppendArgument as ffi::c_int => {
-                Ok(Interface::ContextAppendArgument)
-            }
+            x if x == Interface::GetPtr as ffi::c_int => Ok(Interface::GetPtr),
+            x if x == Interface::Invalidate as ffi::c_int => Ok(Interface::Invalidate),
+            x if x == Interface::AppendArgument as ffi::c_int => Ok(Interface::AppendArgument),
             x if x == Interface::ParameterGetInteger as ffi::c_int => {
                 Ok(Interface::ParameterGetInteger)
             }
@@ -82,7 +76,6 @@ impl TryFrom<ffi::c_int> for Interface {
             x if x == Interface::ParameterGetKeyword as ffi::c_int => {
                 Ok(Interface::ParameterGetKeyword)
             }
-            x if x == Interface::WorkspaceGetPtr as ffi::c_int => Ok(Interface::WorkspaceGetPtr),
             _ => Err(()),
         }
     }
@@ -90,33 +83,51 @@ impl TryFrom<ffi::c_int> for Interface {
 
 extern "C" fn get(id: ffi::c_int) -> *const ffi::c_void {
     match Interface::try_from(id) {
-        Ok(Interface::ContextGetWorkingDirectory) => {
-            context_get_working_directory as *const ffi::c_void
-        }
-        Ok(Interface::ContextInvalidate) => context_invalidate as *const ffi::c_void,
-        Ok(Interface::ContextAppendArgument) => context_append_argument as *const ffi::c_void,
+        Ok(Interface::GetWorkingDirectory) => get_working_directory as *const ffi::c_void,
+        Ok(Interface::GetPtr) => get_ptr as *const ffi::c_void,
+        Ok(Interface::Invalidate) => invalidate as *const ffi::c_void,
+        Ok(Interface::AppendArgument) => append_argument as *const ffi::c_void,
         Ok(Interface::ParameterGetInteger) => parameter_get_integer as *const ffi::c_void,
         Ok(Interface::ParameterGetSwitch) => parameter_get_switch as *const ffi::c_void,
         Ok(Interface::ParameterGetKeyword) => parameter_get_keyword as *const ffi::c_void,
-        Ok(Interface::WorkspaceGetPtr) => workspace_get_ptr as *const ffi::c_void,
         _ => ptr::null(),
     }
 }
 
-extern "C" fn context_get_working_directory(ctx: *mut Context, ptr: *mut ffi::c_char, size: usize) {
+extern "C" fn get_working_directory(ctx: *mut Context, ptr: *mut ffi::c_char, size: usize) {
     let ctx = if let Some(ctx) = unsafe { ctx.as_ref() } {
         ctx
     } else {
         return;
     };
-    let len = ctx.working_directory.len().min(size - 1);
+    let working_directory = ctx.inner.get_working_directory(ctx.individual);
+    let working_directory = working_directory.as_os_str().as_encoded_bytes();
+    let len = working_directory.len().min(size - 1);
     unsafe {
-        ptr.copy_from_nonoverlapping(ctx.working_directory.as_ptr() as _, len);
+        ptr.copy_from_nonoverlapping(working_directory.as_ptr() as _, len);
         *ptr.add(len) = 0;
     }
 }
 
-extern "C" fn context_invalidate(ctx: *mut Context) {
+extern "C" fn get_ptr(ctx: *mut Context, name: *const ffi::c_char) -> *const *mut ffi::c_void {
+    let ctx = if let Some(ctx) = unsafe { ctx.as_ref() } {
+        ctx
+    } else {
+        return ptr::null();
+    };
+    let name = if let Some(name) = unsafe { ffi::CStr::from_ptr(name).to_str().ok() } {
+        name
+    } else {
+        return ptr::null();
+    };
+    if let Some(ptr) = ctx.inner.workspace.0.get(name) {
+        ptr
+    } else {
+        ptr::null()
+    }
+}
+
+extern "C" fn invalidate(ctx: *mut Context) {
     let ctx = if let Some(ctx) = unsafe { ctx.as_mut() } {
         ctx
     } else {
@@ -125,7 +136,7 @@ extern "C" fn context_invalidate(ctx: *mut Context) {
     ctx.individual.fitness = Fitness::Invalid;
 }
 
-extern "C" fn context_append_argument(ctx: *mut Context, argument: *const ffi::c_char) {
+extern "C" fn append_argument(ctx: *mut Context, argument: *const ffi::c_char) {
     let ctx = if let Some(ctx) = unsafe { ctx.as_mut() } {
         ctx
     } else {
@@ -145,7 +156,7 @@ fn get_parameter<'a>(
     let name = unsafe { ffi::CStr::from_ptr(name) }
         .to_string_lossy()
         .intern();
-    let specification = ctx.profile.0.get(&name)?;
+    let specification = ctx.inner.configuration.profile.0.get(&name)?;
     let value = ctx.individual.parameters.get(&name)?;
     Some((specification, value))
 }
@@ -231,26 +242,5 @@ extern "C" fn parameter_get_keyword(
             options.0[*i].as_ptr() as *const ffi::c_char
         }
         _ => ptr::null(),
-    }
-}
-
-extern "C" fn workspace_get_ptr(
-    ws: *const Workspace,
-    name: *const ffi::c_char,
-) -> *const *mut ffi::c_void {
-    let ws = if let Some(ws) = unsafe { ws.as_ref() } {
-        ws
-    } else {
-        return ptr::null();
-    };
-    let name = if let Some(name) = unsafe { ffi::CStr::from_ptr(name).to_str().ok() } {
-        name
-    } else {
-        return ptr::null();
-    };
-    if let Some(ptr) = ws.0.get(name) {
-        ptr
-    } else {
-        ptr::null()
     }
 }

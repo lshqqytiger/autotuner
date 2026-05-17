@@ -1,7 +1,8 @@
-use crate::workspace::Workspace;
 use libloading::Symbol;
 use serde::{Deserialize, Serialize};
 use std::{ffi, ptr};
+
+use crate::ffi::workspace::Workspace;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Configuration {
@@ -32,9 +33,9 @@ impl<'a> Helper<'a> {
 
 #[repr(u32)]
 enum Interface {
-    WorkspaceSetPtr = 0x00,
+    SetPtr = 0x00,
 
-    WorkspaceGetPtr = 0x10,
+    GetPtr = 0x10,
 }
 
 impl TryFrom<ffi::c_int> for Interface {
@@ -42,8 +43,8 @@ impl TryFrom<ffi::c_int> for Interface {
 
     fn try_from(value: ffi::c_int) -> Result<Self, Self::Error> {
         match value {
-            x if x == Interface::WorkspaceSetPtr as ffi::c_int => Ok(Interface::WorkspaceSetPtr),
-            x if x == Interface::WorkspaceGetPtr as ffi::c_int => Ok(Interface::WorkspaceGetPtr),
+            x if x == Interface::SetPtr as ffi::c_int => Ok(Interface::SetPtr),
+            x if x == Interface::GetPtr as ffi::c_int => Ok(Interface::GetPtr),
             _ => Err(()),
         }
     }
@@ -51,17 +52,13 @@ impl TryFrom<ffi::c_int> for Interface {
 
 extern "C" fn get(id: ffi::c_int) -> *const ffi::c_void {
     match Interface::try_from(id) {
-        Ok(Interface::WorkspaceSetPtr) => workspace_set_ptr as *const ffi::c_void,
-        Ok(Interface::WorkspaceGetPtr) => workspace_get_ptr as *const ffi::c_void,
+        Ok(Interface::SetPtr) => set_ptr as *const ffi::c_void,
+        Ok(Interface::GetPtr) => get_ptr as *const ffi::c_void,
         _ => ptr::null(),
     }
 }
 
-extern "C" fn workspace_set_ptr(
-    ws: *mut Workspace,
-    name: *const ffi::c_char,
-    ptr: *mut ffi::c_void,
-) {
+extern "C" fn set_ptr(ws: *mut Workspace, name: *const ffi::c_char, ptr: *mut ffi::c_void) {
     let ws = if let Some(ws) = unsafe { ws.as_mut() } {
         ws
     } else {
@@ -75,10 +72,7 @@ extern "C" fn workspace_set_ptr(
     ws.0.insert(name, ptr);
 }
 
-extern "C" fn workspace_get_ptr(
-    ws: *mut Workspace,
-    name: *const ffi::c_char,
-) -> *const *mut ffi::c_void {
+extern "C" fn get_ptr(ws: *mut Workspace, name: *const ffi::c_char) -> *const *mut ffi::c_void {
     let ws = if let Some(ws) = unsafe { ws.as_ref() } {
         ws
     } else {

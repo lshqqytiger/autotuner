@@ -1,28 +1,21 @@
 mod compile;
 mod configuration;
-mod context;
 mod criterion;
 mod direction;
+mod ffi;
 mod genetic;
-mod helper;
-mod hook;
 mod individual;
 mod output;
 mod parameter;
-mod runner;
 mod state;
 mod utils;
-mod workspace;
 
 use crate::{
     configuration::{Configuration, StopAction},
-    context::Context,
     direction::Direction,
-    helper::Helper,
-    hook::Hook,
+    ffi::{context::Context, helper::Helper, hook::Hook, runner::Runner, workspace::Workspace},
     individual::{Fitness, Individual, Representative},
     output::IntoJson,
-    runner::Runner,
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
@@ -32,7 +25,7 @@ use libc::{SIGQUIT, SIGSEGV};
 use libloading::Library;
 use rand::seq::SliceRandom;
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, hint, process, time::SystemTime};
+use std::{fs, hint, path, process, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -103,7 +96,7 @@ struct Autotuner<'a> {
     temp_directory: TempDir,
     helper: Library,
     hook: Library,
-    workspace: workspace::Workspace<'a>,
+    workspace: Workspace<'a>,
 }
 
 impl<'a> Drop for Autotuner<'a> {
@@ -166,7 +159,7 @@ impl<'a> Autotuner<'a> {
         )?;
         let hook = unsafe { Library::new(&path) }?;
 
-        let mut workspace = workspace::Workspace::new();
+        let mut workspace = Workspace::new();
 
         unsafe {
             let initializer = helper
@@ -494,25 +487,25 @@ impl<'a> Autotuner<'a> {
         output
     }
 
-    fn evaluate(&self, individual: &mut Individual, repetition: usize) {
-        let working_directory = self
-            .temp_directory
+    #[inline]
+    fn get_working_directory(&self, individual: &Individual) -> path::PathBuf {
+        self.temp_directory
             .path()
             .join("individuals")
-            .join(individual.id.as_ref());
+            .join(individual.id.as_ref())
+    }
+
+    fn evaluate(&self, individual: &mut Individual, repetition: usize) {
+        let working_directory = self.get_working_directory(individual);
         if !working_directory.exists() {
             fs::create_dir(&working_directory).unwrap();
         }
 
-        let mut context = Context::new(
-            &self.configuration.profile,
-            individual,
-            working_directory.as_os_str().as_encoded_bytes(),
-        );
+        let mut context = Context::new(self, individual);
         for name in &self.configuration.hooks.pre {
             unsafe {
                 let task = self.hook.get::<Hook>(name.as_bytes()).unwrap();
-                task.call(&mut context, &self.workspace);
+                task.call(&mut context);
             }
         }
         if context.individual.fitness == Fitness::Invalid {
@@ -547,7 +540,7 @@ impl<'a> Autotuner<'a> {
                     affinity::set_thread_affinity(&cores).unwrap();
                     affinity
                 });
-                runner.call(&mut context, &self.workspace);
+                runner.call(&mut context);
                 if let Some(affinity) = affinity {
                     affinity::set_thread_affinity(&affinity).unwrap();
                 }
@@ -568,7 +561,7 @@ impl<'a> Autotuner<'a> {
         for name in &self.configuration.hooks.post {
             unsafe {
                 let task = self.hook.get::<Hook>(name.as_bytes()).unwrap();
-                task.call(&mut context, &self.workspace);
+                task.call(&mut context);
             }
         }
     }
