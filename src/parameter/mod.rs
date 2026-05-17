@@ -2,7 +2,7 @@ mod condition;
 
 pub(crate) mod space;
 
-use crate::{individual::Individual, utils::interner::Intern};
+use crate::{configuration::Mutation, individual::Individual, utils::interner::Intern};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
@@ -10,6 +10,8 @@ use std::{collections::BTreeMap, sync::Arc};
 pub(crate) trait Space {
     fn random(&self) -> Value;
     fn adjust(&self, _: &mut Value) {}
+    fn crossover(&self, a: Value, b: Value) -> Value;
+    fn mutate(&self, mutations: &Mutation, value: &mut Value);
 }
 
 #[derive(Deserialize)]

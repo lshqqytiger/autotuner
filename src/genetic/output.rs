@@ -1,11 +1,15 @@
 use crate::{
     direction::Direction,
+    genetic::GenerationSummary,
     individual::{Fitness, Individual},
     parameter::Profile,
-    strategies::{genetic::GenerationSummary, output::IntoJson},
 };
 use fxhash::FxHashMap;
 use std::sync::Arc;
+
+pub(crate) trait IntoJson {
+    fn into_json(self, profile: &Profile) -> serde_json::Value;
+}
 
 pub(crate) struct Output {
     pub(crate) ranking: Ranking,

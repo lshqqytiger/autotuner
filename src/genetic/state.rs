@@ -1,8 +1,4 @@
-use crate::{
-    individual::Individual,
-    parameter::Profile,
-    strategies::genetic::options::{Hyperparameters, Options},
-};
+use crate::{configuration::Hyperparameters, individual::Individual, parameter::Profile};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 
@@ -15,10 +11,10 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new(options: &Options, profile: &Profile) -> Self {
-        let hyperparameters = options.hyperparameters.clone();
-        let population = (0..options.hyperparameters.initial_population).into_par_iter();
-        let population = if let Some(ref initial) = options.hyperparameters.initial {
+    pub(crate) fn new(hyperparameters: &Hyperparameters, profile: &Profile) -> Self {
+        let hyperparameters = hyperparameters.clone();
+        let population = (0..hyperparameters.initial_population).into_par_iter();
+        let population = if let Some(ref initial) = hyperparameters.initial {
             let individual = profile.string_to_individual(initial);
             population.map(|_| individual.clone()).collect::<Vec<_>>()
         } else {
