@@ -527,7 +527,7 @@ impl<'a> Autotuner<'a> {
                 self.sources
                     .iter()
                     .chain(self.configuration.compiler_arguments.iter())
-                    .chain(context.arguments.iter()),
+                    .chain(context.individual.arguments.iter()),
             )
             .unwrap();
         }

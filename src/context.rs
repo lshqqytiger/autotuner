@@ -4,7 +4,6 @@ pub(crate) struct Context<'a> {
     pub(crate) profile: &'a Profile,
     pub(crate) individual: &'a mut Individual,
     pub(crate) working_directory: &'a [u8],
-    pub(crate) arguments: Vec<String>,
 }
 
 impl<'a> Context<'a> {
@@ -17,7 +16,6 @@ impl<'a> Context<'a> {
             profile,
             individual,
             working_directory,
-            arguments: Vec::new(),
         }
     }
 }

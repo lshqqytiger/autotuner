@@ -108,6 +108,11 @@ impl Representative<Fitness> for Vec<Fitness> {
 pub(crate) struct Individual {
     pub(crate) id: Arc<str>,
     pub(crate) parameters: Combination,
+
+    // for compilation
+    pub(crate) arguments: Vec<String>,
+
+    // for evaluation
     pub(crate) fitness: Fitness,
 }
 
@@ -157,6 +162,7 @@ impl Individual {
                 .collect::<String>()
                 .intern(),
             parameters,
+            arguments: Vec::new(),
             fitness: Fitness::Unknown,
         }
     }

@@ -131,7 +131,7 @@ extern "C" fn context_append_argument(ctx: *mut Context, argument: *const ffi::c
     } else {
         return;
     };
-    ctx.arguments.push(
+    ctx.individual.arguments.push(
         unsafe { ffi::CStr::from_ptr(argument) }
             .to_string_lossy()
             .into_owned(),
