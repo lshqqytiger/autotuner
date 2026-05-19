@@ -1,6 +1,6 @@
 use crate::configuration::Mutation;
 use crate::individual::Individual;
-use crate::parameter::Profile;
+use crate::parameter::{IntoJson, Profile};
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -36,6 +36,29 @@ impl GenerationSummary {
             current_best,
             current_worst,
         }
+    }
+}
+
+impl IntoJson for GenerationSummary {
+    fn into_json(self, profile: &Profile) -> serde_json::Value {
+        let mut serialized = serde_json::Map::new();
+        serialized.insert(
+            "timestamp".to_string(),
+            serde_json::Value::Number(self.timestamp.into()),
+        );
+        serialized.insert(
+            "global_best".to_string(),
+            serde_json::Value::String(profile.individual_to_string(&self.global_best)),
+        );
+        serialized.insert(
+            "current_best".to_string(),
+            serde_json::Value::Number(serde_json::Number::from_f64(self.current_best).unwrap()),
+        );
+        serialized.insert(
+            "current_worst".to_string(),
+            serde_json::Value::Number(serde_json::Number::from_f64(self.current_worst).unwrap()),
+        );
+        serde_json::Value::Object(serialized)
     }
 }
 

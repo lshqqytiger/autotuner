@@ -15,7 +15,7 @@ use crate::{
     direction::Direction,
     ffi::{context::Context, helper::Helper, hook::Hook, runner::Runner, workspace::Workspace},
     individual::{Fitness, Individual, Representative},
-    output::IntoJson,
+    parameter::IntoJson,
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;

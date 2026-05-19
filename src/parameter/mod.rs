@@ -147,3 +147,7 @@ pub(crate) enum Value {
 }
 
 pub(crate) type Combination = BTreeMap<Arc<str>, Value>;
+
+pub(crate) trait IntoJson {
+    fn into_json(self, profile: &Profile) -> serde_json::Value;
+}
