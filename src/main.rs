@@ -20,10 +20,11 @@ use crate::{
 };
 use anyhow::anyhow;
 use argh::{FromArgValue, FromArgs};
-use fxhash::FxHashMap;
+use fxhash::FxHashSet;
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::Library;
 use rand::seq::SliceRandom;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use signal_hook_registry::{register, register_unchecked, unregister};
 use std::{fs, hint, path, process, time::SystemTime};
 use tempdir::TempDir;
@@ -206,26 +207,36 @@ impl<'a> Autotuner<'a> {
         };
 
         let mut rng = rand::rng();
-        let mut temp_results = FxHashMap::default();
         // Rust compiler somehow optimizes this function call or later is_gt() call in wrong way
         // so wrap this call with black_box to prevent optimization
         let mut best_overall = hint::black_box(self.configuration.direction.worst());
         loop {
-            let mut evaluation_results = Vec::with_capacity(state.population.len());
-
+            // remove duplicates
+            let mut seen = FxHashSet::default();
             for individual in &mut state.population {
-                self.compile(individual);
+                if seen.insert(individual.id.clone()) {
+                    continue;
+                }
+
+                let mut replacement = Individual::random(&self.configuration.profile);
+                while !seen.insert(replacement.id.clone()) {
+                    replacement = Individual::random(&self.configuration.profile);
+                }
+                *individual = replacement;
             }
+            drop(seen);
+
+            state.population.par_iter_mut().for_each(|individual| {
+                self.compile(individual);
+            });
 
             // evaluate individuals
             let len = state.population.len();
             let mut index = 0;
             while index < len {
                 guard!(SIGQUIT, {
-                    let result = if let Some(&result) = temp_results.get(&index) {
-                        result
-                    } else {
-                        let individual = &mut state.population[index];
+                    let individual = &mut state.population[index];
+                    if let Fitness::Unknown = individual.fitness {
                         self.evaluate(individual, repetition);
                         if individual.fitness.is_valid() || log_level >= LogLevel::Normal {
                             print!("{}", state.generation);
@@ -249,32 +260,31 @@ impl<'a> Autotuner<'a> {
                             }
                             println!();
                         }
-
-                        individual.fitness
-                    };
-
-                    if state.generation == 1 && state.population[index].fitness.is_invalid() {
-                        state.population[index] = Individual::random(&self.configuration.profile);
-                        continue;
                     }
-
-                    output.ranking.push(&state.population[index]);
-                    evaluation_results.push((result, index));
-                    index += 1;
                 });
 
                 if *is_signaled {
                     break;
                 }
+
+                output.ranking.push(&state.population[index]);
+                index += 1;
             }
 
             if *is_signaled {
                 break;
             }
 
-            let mut flattened = evaluation_results
+            let mut flattened = state
+                .population
                 .iter()
-                .map(|(fitness, index)| (fitness.into_f64(self.configuration.criterion), *index))
+                .enumerate()
+                .map(|(index, individual)| {
+                    (
+                        individual.fitness.into_f64(self.configuration.criterion),
+                        index,
+                    )
+                })
                 .collect::<Vec<_>>();
 
             // record generation summary
@@ -363,74 +373,86 @@ impl<'a> Autotuner<'a> {
             }
             flattened.shuffle(&mut rng);
 
+            for individual in &mut state.population {
+                individual.reset();
+            }
+
             // generate & evaluate children
             let mut children = Vec::with_capacity(state.hyperparameters.generate.value);
-            temp_results.clear();
-            let mut index = 0;
-            while index < state.hyperparameters.generate.value {
-                let result = genetic::stochastic_universal_sampling(&flattened, 2);
-                let mut child = genetic::crossover(
-                    &self.configuration.profile,
-                    &state.population[result[0]],
-                    &state.population[result[1]],
-                );
-                genetic::mutate(
-                    &self.configuration.profile,
-                    &state.hyperparameters.mutate,
-                    &mut child,
-                );
-
-                guard!(SIGQUIT, {
-                    self.evaluate(&mut child, repetition);
-                    if child.fitness.is_valid() || log_level >= LogLevel::Normal {
-                        print!("{}", state.generation);
-                        if let Some(limit) = state.hyperparameters.terminate.limit {
-                            print!("/{}", limit);
-                        } else {
-                            print!(";");
-                        }
-                        print!(
-                            " {}/{}: {}",
-                            index + 1,
-                            state.hyperparameters.generate.value,
-                            child.fitness
+            while children.len() < state.hyperparameters.generate.value {
+                let num_children = children.len();
+                let num_current = state.hyperparameters.generate.value - num_children;
+                let mut current = (0..num_current)
+                    .into_par_iter()
+                    .map(|_| {
+                        let result = genetic::stochastic_universal_sampling(&flattened, 2);
+                        let mut child = genetic::crossover(
+                            &self.configuration.profile,
+                            &state.population[result[0]],
+                            &state.population[result[1]],
                         );
-                        if child.fitness.is_valid() {
-                            if let Some(unit) = &self.configuration.unit {
-                                print!(" {}", unit);
+                        genetic::mutate(
+                            &self.configuration.profile,
+                            &state.hyperparameters.mutate,
+                            &mut child,
+                        );
+                        self.compile(&mut child);
+                        child
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut index = 0;
+                while index < num_current {
+                    guard!(SIGQUIT, {
+                        let child = &mut current[index];
+                        if let Fitness::Unknown = child.fitness {
+                            self.evaluate(child, repetition);
+                            if child.fitness.is_valid() || log_level >= LogLevel::Normal {
+                                print!("{}", state.generation);
+                                if let Some(limit) = state.hyperparameters.terminate.limit {
+                                    print!("/{}", limit);
+                                } else {
+                                    print!(";");
+                                }
+                                print!(
+                                    " {}/{}: {}",
+                                    num_children + index + 1,
+                                    state.hyperparameters.generate.value,
+                                    child.fitness
+                                );
+                                if child.fitness.is_valid() {
+                                    if let Some(unit) = &self.configuration.unit {
+                                        print!(" {}", unit);
+                                    }
+                                }
+                                println!();
+                                if log_level >= LogLevel::Verbose {
+                                    println!(
+                                        "{}",
+                                        self.configuration.profile.individual_to_string(child)
+                                    );
+                                }
+                                println!();
                             }
                         }
-                        println!();
-                        if log_level >= LogLevel::Verbose {
-                            println!(
-                                "{}",
-                                self.configuration.profile.individual_to_string(&child)
-                            );
-                        }
-                        println!();
+                    });
+
+                    if *is_signaled {
+                        break;
                     }
 
-                    // retry
-                    if child.fitness.is_invalid() {
-                        continue;
-                    }
-
-                    temp_results.insert(
-                        if index < state.hyperparameters.delete.value {
-                            holes[index]
-                        } else {
-                            state.population.len() + index - state.hyperparameters.delete.value
-                        },
-                        child.fitness,
-                    );
-                });
+                    index += 1;
+                }
 
                 if *is_signaled {
                     break;
                 }
 
-                children.push(child);
-                index += 1;
+                for child in current {
+                    if child.fitness.is_valid() {
+                        children.push(child);
+                    }
+                }
             }
 
             if *is_signaled {

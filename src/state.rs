@@ -1,4 +1,4 @@
-use crate::{configuration::Hyperparameters, individual::Individual, parameter::Profile};
+use crate::{configuration::Hyperparameters, genetic, individual::Individual, parameter::Profile};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,13 @@ impl State {
         let population = (0..hyperparameters.initial_population).into_par_iter();
         let population = if let Some(ref initial) = hyperparameters.initial {
             let individual = profile.string_to_individual(initial);
-            population.map(|_| individual.clone()).collect::<Vec<_>>()
+            population
+                .map(|_| {
+                    let mut individual = individual.clone();
+                    genetic::mutate(profile, &hyperparameters.mutate, &mut individual);
+                    individual
+                })
+                .collect::<Vec<_>>()
         } else {
             population
                 .map(|_| Individual::random(profile))

@@ -52,11 +52,6 @@ impl Fitness {
     }
 
     #[inline]
-    pub(crate) fn is_invalid(&self) -> bool {
-        matches!(self, Fitness::Invalid)
-    }
-
-    #[inline]
     pub(crate) fn into_f64(self, criterion: Criterion) -> f64 {
         match self {
             Fitness::Valid(x) => x,
@@ -177,5 +172,10 @@ impl Individual {
         );
         profile.adjust(&mut individual);
         individual
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.arguments.clear();
+        self.fitness = Fitness::Unknown;
     }
 }
