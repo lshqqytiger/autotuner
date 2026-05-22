@@ -4,6 +4,7 @@ use crate::parameter::{IntoJson, Profile};
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
+use std::io;
 use std::time::SystemTime;
 
 #[derive(Serialize)]
@@ -15,11 +16,12 @@ pub(crate) struct GenerationSummary {
 }
 
 impl GenerationSummary {
-    pub(crate) fn print(&self, unit: &Option<String>) {
+    pub(crate) fn print(&self, file: &mut dyn io::Write, unit: &Option<String>) -> io::Result<()> {
         let unit = unit.as_deref().unwrap_or("");
-        println!("Best overall: {} {}", self.global_best.fitness, unit);
-        println!("Best: {} {}", self.current_best, unit);
-        println!("Worst: {} {}", self.current_worst, unit);
+        writeln!(file, "Best overall: {} {}", self.global_best.fitness, unit)?;
+        writeln!(file, "Best: {} {}", self.current_best, unit)?;
+        writeln!(file, "Worst: {} {}", self.current_worst, unit)?;
+        Ok(())
     }
 }
 

@@ -19,14 +19,14 @@ use crate::{
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
-use argh::{FromArgValue, FromArgs};
+use argh::FromArgs;
 use fxhash::FxHashSet;
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::Library;
 use rand::seq::SliceRandom;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 use signal_hook_registry::{register, register_unchecked, unregister};
-use std::{fs, hint, path, process, time::SystemTime};
+use std::{fs, hint, io, path, process, time::SystemTime};
 use tempdir::TempDir;
 
 #[derive(FromArgs)]
@@ -67,27 +67,17 @@ struct Options {
     /// output file (default: result.json)
     output: String,
 
-    #[argh(option, short = 'l', default = "LogLevel::Normal")]
-    /// logging level
-    log_level: LogLevel,
-}
+    #[argh(option)]
+    /// path to log file for generation summary (default: stdout)
+    log_summary: Option<String>,
 
-#[derive(PartialEq, PartialOrd, Eq, Ord)]
-pub(crate) enum LogLevel {
-    Quiet = 0,
-    Normal = 1,
-    Verbose = 2,
-}
+    #[argh(option)]
+    /// path to log file for individual evaluation (default: none)
+    log_individual: Option<String>,
 
-impl FromArgValue for LogLevel {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value.to_lowercase().as_str() {
-            "quiet" => Ok(LogLevel::Quiet),
-            "normal" => Ok(LogLevel::Normal),
-            "verbose" => Ok(LogLevel::Verbose),
-            _ => Err(format!("Invalid log level: {}", value)),
-        }
-    }
+    #[argh(switch)]
+    /// log invalid individuals (default: false)
+    log_invalid: bool,
 }
 
 struct Autotuner<'a> {
@@ -171,7 +161,9 @@ impl<'a> Autotuner<'a> {
         repetition: usize,
         candidates: usize,
         checkpoint: Option<state::State>,
-        log_level: LogLevel,
+        log_summary: &mut dyn io::Write,
+        log_individual: &mut dyn io::Write,
+        log_invalid: bool,
     ) -> Union<serde_json::Value, state::State> {
         let is_signaled = ManuallyMove::new(false);
         let sigquit_handler = unsafe {
@@ -224,27 +216,14 @@ impl<'a> Autotuner<'a> {
                     let individual = &mut state.population[index];
                     if let Fitness::Unknown = individual.fitness {
                         self.evaluate(individual, repetition);
-                        if individual.fitness.is_valid() || log_level >= LogLevel::Normal {
-                            print!("{}", state.generation);
-                            if let Some(limit) = state.hyperparameters.terminate.limit {
-                                print!("/{}", limit);
-                            } else {
-                                print!(";");
-                            }
-                            print!(" {}/{}: {}", index + 1, len, individual.fitness);
-                            if individual.fitness.is_valid() {
-                                if let Some(unit) = &self.configuration.unit {
-                                    print!(" {}", unit);
-                                }
-                            }
-                            println!();
-                            if log_level >= LogLevel::Verbose {
-                                println!(
-                                    "{}",
-                                    self.configuration.profile.individual_to_string(individual)
-                                );
-                            }
-                            println!();
+                        if individual.fitness.is_valid() || log_invalid {
+                            write!(
+                                log_individual,
+                                "{}\n{}\n",
+                                individual.fitness,
+                                self.configuration.profile.individual_to_string(individual)
+                            )
+                            .unwrap();
                         }
                     }
                 });
@@ -278,8 +257,15 @@ impl<'a> Autotuner<'a> {
             let boundaries = self.configuration.direction.boundaries(iter);
             let summary =
                 genetic::GenerationSummary::new(output.ranking.best().unwrap(), boundaries);
-            println!("=== Generation #{} Summary ===", state.generation);
-            summary.print(&self.configuration.unit);
+            writeln!(
+                log_summary,
+                "=== Generation #{} Summary ===",
+                state.generation
+            )
+            .unwrap();
+            summary
+                .print(log_summary, &self.configuration.unit)
+                .unwrap();
             output.history.push(summary);
 
             let (best, worst) = boundaries;
@@ -313,13 +299,13 @@ impl<'a> Autotuner<'a> {
                     state.hyperparameters.terminate.goal = None;
                 }
             } else if let Some(endure) = state.hyperparameters.terminate.endure {
-                print!("{}/{}\n", state.count, endure);
+                write!(log_summary, "{}/{}\n", state.count, endure).unwrap();
                 if state.count == endure {
                     break;
                 }
             }
 
-            println!();
+            writeln!(log_summary).unwrap();
 
             // select individuals to remove
             let mut inverted = flattened.clone();
@@ -393,32 +379,14 @@ impl<'a> Autotuner<'a> {
                         let child = &mut current[index];
                         if let Fitness::Unknown = child.fitness {
                             self.evaluate(child, repetition);
-                            if child.fitness.is_valid() || log_level >= LogLevel::Normal {
-                                print!("{}", state.generation);
-                                if let Some(limit) = state.hyperparameters.terminate.limit {
-                                    print!("/{}", limit);
-                                } else {
-                                    print!(";");
-                                }
-                                print!(
-                                    " {}/{}: {}",
-                                    num_children + index + 1,
-                                    state.hyperparameters.generate.value,
-                                    child.fitness
-                                );
-                                if child.fitness.is_valid() {
-                                    if let Some(unit) = &self.configuration.unit {
-                                        print!(" {}", unit);
-                                    }
-                                }
-                                println!();
-                                if log_level >= LogLevel::Verbose {
-                                    println!(
-                                        "{}",
-                                        self.configuration.profile.individual_to_string(child)
-                                    );
-                                }
-                                println!();
+                            if child.fitness.is_valid() || log_invalid {
+                                write!(
+                                    log_individual,
+                                    "{}\n{}\n",
+                                    child.fitness,
+                                    self.configuration.profile.individual_to_string(child)
+                                )
+                                .unwrap();
                             }
                         }
                     });
@@ -551,7 +519,7 @@ impl<'a> Autotuner<'a> {
             unsafe {
                 let result = register_unchecked(SIGSEGV, |_| {
                     // can we do better than this?
-                    println!("Segmentation fault occurred during evaluation");
+                    eprintln!("Segmentation fault occurred during evaluation");
                     process::exit(1);
                 });
                 let affinity = if self.cores.is_empty() {
@@ -594,6 +562,24 @@ fn main() -> anyhow::Result<()> {
         fs::read_to_string(&args.configuration).expect("Failed to read configuration file");
     let configuration = serde_json::from_str::<Configuration>(&configuration)
         .expect("Failed to parse configuration file");
+    let state = args.continue_.as_ref().map(|filename| {
+        let content = fs::read_to_string(filename).expect("Failed to read checkpoint file");
+        serde_json::from_str::<state::State>(&content).expect("Failed to parse checkpoint file")
+    });
+    let mut log_summary = if let Some(ref filename) = args.log_summary {
+        Box::new(
+            fs::File::create(filename).expect("Failed to create log file for generation summary"),
+        ) as Box<dyn io::Write>
+    } else {
+        Box::new(io::stdout()) as Box<dyn io::Write>
+    };
+    let mut log_individual = if let Some(ref filename) = args.log_individual {
+        Box::new(
+            fs::File::create(filename).expect("Failed to create log file for individual results"),
+        ) as Box<dyn io::Write>
+    } else {
+        Box::new(io::sink()) as Box<dyn io::Write>
+    };
 
     let autotuner = Autotuner::new(
         &args.sources,
@@ -602,16 +588,14 @@ fn main() -> anyhow::Result<()> {
         configuration,
         &args.cores,
     )?;
-    let state = args.continue_.as_ref().map(|filename| {
-        let content = fs::read_to_string(filename).expect("Failed to read checkpoint file");
-        serde_json::from_str::<state::State>(&content).expect("Failed to parse checkpoint file")
-    });
     match_union!(
         autotuner.run(
             args.repeat,
             args.candidates,
             state,
-            args.log_level,
+            &mut log_summary,
+            &mut log_individual,
+            args.log_invalid
         );
         output => {
             fs::write(
