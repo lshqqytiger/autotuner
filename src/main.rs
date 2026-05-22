@@ -47,9 +47,9 @@ struct Options {
     /// path to hook files
     hook: Vec<String>,
 
-    #[argh(option, short = 'c', default = "Vec::new()")]
+    #[argh(option, short = 'c', default = "None")]
     /// CPU cores to use
-    cores: Vec<usize>,
+    cores: Option<Vec<usize>>,
 
     #[argh(option, short = 'r', default = "15")]
     /// number of repetitions for each individual (default: 15)
@@ -612,7 +612,7 @@ fn main() -> anyhow::Result<()> {
         &args.helper,
         &args.hook,
         configuration,
-        &Some(args.cores),
+        &args.cores,
     )?;
     let state = args.continue_.as_ref().map(|filename| {
         let content = fs::read_to_string(filename).expect("Failed to read checkpoint file");
