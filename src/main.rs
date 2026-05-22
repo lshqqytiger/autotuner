@@ -68,6 +68,10 @@ struct Options {
     output: String,
 
     #[argh(option)]
+    /// path to working directory (default: auto-generated)
+    working_dir: Option<String>,
+
+    #[argh(option)]
     /// path to log file for generation summary (default: stdout)
     log_summary: Option<String>,
 
@@ -80,11 +84,42 @@ struct Options {
     log_invalid: bool,
 }
 
+enum WorkingDir {
+    Temporary(TempDir),
+    Persistent(path::PathBuf),
+}
+
+impl WorkingDir {
+    fn path(&self) -> &path::Path {
+        match self {
+            WorkingDir::Temporary(temp_dir) => temp_dir.path(),
+            WorkingDir::Persistent(path) => path.as_path(),
+        }
+    }
+}
+
+impl<'a, P: AsRef<path::Path>> TryFrom<Option<P>> for WorkingDir {
+    type Error = io::Error;
+
+    fn try_from(value: Option<P>) -> Result<Self, Self::Error> {
+        if let Some(path) = value {
+            let path = path.as_ref();
+            if !path.exists() {
+                fs::create_dir(path)?;
+            }
+            Ok(WorkingDir::Persistent(path.to_path_buf()))
+        } else {
+            let temp_dir = TempDir::new("autotuner")?;
+            Ok(WorkingDir::Temporary(temp_dir))
+        }
+    }
+}
+
 struct Autotuner<'a> {
     sources: &'a [String],
     configuration: Configuration,
     cores: &'a [usize],
-    temp_directory: TempDir,
+    working_dir: WorkingDir,
     helper: Library,
     hook: Library,
     workspace: Workspace<'a>,
@@ -103,12 +138,13 @@ impl<'a> Drop for Autotuner<'a> {
 }
 
 impl<'a> Autotuner<'a> {
-    fn new(
+    fn new<P: AsRef<path::Path>>(
         sources: &'a [String],
         helper: &'a [String],
         hook: &'a [String],
         configuration: Configuration,
         cores: &'a [usize],
+        working_dir: Option<P>,
     ) -> anyhow::Result<Self> {
         if configuration.hyperparameters.initial_population <= 1 {
             return Err(anyhow!("Initial population size must be greater than 1"));
@@ -117,10 +153,13 @@ impl<'a> Autotuner<'a> {
             return Err(anyhow!("Number of each generation must be greater than 0"));
         }
 
-        let temp_directory = TempDir::new("autotuner")?;
-        fs::create_dir(temp_directory.path().join("individuals"))?;
+        let working_dir = WorkingDir::try_from(working_dir)?;
+        let individuals_dir = working_dir.path().join("individuals");
+        if !individuals_dir.exists() {
+            fs::create_dir(&individuals_dir)?;
+        }
 
-        let path = temp_directory.path().join("libhelper.so");
+        let path = working_dir.path().join("libhelper.so");
         compile::compile(
             &configuration.compiler,
             &path,
@@ -128,7 +167,7 @@ impl<'a> Autotuner<'a> {
         )?;
         let helper = unsafe { Library::new(&path) }?;
 
-        let path = temp_directory.path().join("libhook.so");
+        let path = working_dir.path().join("libhook.so");
         compile::compile(
             &configuration.compiler,
             &path,
@@ -148,7 +187,7 @@ impl<'a> Autotuner<'a> {
         Ok(Autotuner {
             sources,
             configuration,
-            temp_directory,
+            working_dir,
             helper,
             hook,
             workspace,
@@ -464,7 +503,7 @@ impl<'a> Autotuner<'a> {
 
     #[inline]
     fn get_working_directory(&self, individual: &Individual) -> path::PathBuf {
-        self.temp_directory
+        self.working_dir
             .path()
             .join("individuals")
             .join(individual.id.as_ref())
@@ -587,6 +626,7 @@ fn main() -> anyhow::Result<()> {
         &args.hook,
         configuration,
         &args.cores,
+        args.working_dir.as_ref(),
     )?;
     match_union!(
         autotuner.run(
