@@ -47,9 +47,9 @@ struct Options {
     /// path to hook files
     hook: Vec<String>,
 
-    #[argh(option, short = 'c', default = "None")]
+    #[argh(option, short = 'c', default = "Vec::new()")]
     /// CPU cores to use
-    cores: Option<Vec<usize>>,
+    cores: Vec<usize>,
 
     #[argh(option, short = 'r', default = "15")]
     /// number of repetitions for each individual (default: 15)
@@ -93,7 +93,7 @@ impl FromArgValue for LogLevel {
 struct Autotuner<'a> {
     sources: &'a [String],
     configuration: Configuration,
-    cores: Option<Vec<usize>>,
+    cores: &'a [usize],
     temp_directory: TempDir,
     helper: Library,
     hook: Library,
@@ -118,7 +118,7 @@ impl<'a> Autotuner<'a> {
         helper: &'a [String],
         hook: &'a [String],
         configuration: Configuration,
-        cores: &Option<Vec<usize>>,
+        cores: &'a [usize],
     ) -> anyhow::Result<Self> {
         if configuration.hyperparameters.initial_population <= 1 {
             return Err(anyhow!("Initial population size must be greater than 1"));
@@ -126,20 +126,6 @@ impl<'a> Autotuner<'a> {
         if configuration.hyperparameters.generate.value == 0 {
             return Err(anyhow!("Number of each generation must be greater than 0"));
         }
-
-        let cores = if let Some(cores) = cores {
-            if affinity::get_thread_affinity().is_err() {
-                eprintln!("[WARNING] Failed to get thread affinity");
-                None
-            } else {
-                if cores.is_empty() {
-                    return Err(anyhow!("At least one CPU core must be specified"));
-                }
-                Some(cores.to_vec())
-            }
-        } else {
-            None
-        };
 
         let temp_directory = TempDir::new("autotuner")?;
         fs::create_dir(temp_directory.path().join("individuals"))?;
@@ -568,11 +554,13 @@ impl<'a> Autotuner<'a> {
                     println!("Segmentation fault occurred during evaluation");
                     process::exit(1);
                 });
-                let affinity = self.cores.as_ref().map(|cores| {
+                let affinity = if self.cores.is_empty() {
+                    None
+                } else {
                     let affinity = affinity::get_thread_affinity().unwrap();
-                    affinity::set_thread_affinity(&cores).unwrap();
-                    affinity
-                });
+                    affinity::set_thread_affinity(&self.cores).unwrap();
+                    Some(affinity)
+                };
                 runner.call(&mut context);
                 if let Some(affinity) = affinity {
                     affinity::set_thread_affinity(&affinity).unwrap();
