@@ -25,10 +25,7 @@ impl IntoJson for Output {
     fn into_json(self, profile: &Profile) -> serde_json::Value {
         let mut serialized = serde_json::Map::new();
         serialized.insert("ranking".to_string(), self.ranking.into_json(profile));
-        serialized.insert(
-            "history".to_string(),
-            serde_json::to_value(self.history).unwrap(),
-        );
+        serialized.insert("history".to_string(), self.history.into_json(profile));
         serde_json::Value::Object(serialized)
     }
 }

@@ -64,6 +64,16 @@ impl IntoJson for GenerationSummary {
     }
 }
 
+impl IntoJson for Vec<GenerationSummary> {
+    fn into_json(self, profile: &Profile) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.into_iter()
+                .map(|summary| summary.into_json(profile))
+                .collect(),
+        )
+    }
+}
+
 pub(crate) fn crossover(profile: &Profile, a: &Individual, b: &Individual) -> Individual {
     let parameters = a
         .parameters
