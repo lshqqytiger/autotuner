@@ -610,14 +610,22 @@ fn main() -> anyhow::Result<()> {
     });
     let mut log_summary = if let Some(ref filename) = args.log_summary {
         Box::new(
-            fs::File::create(filename).expect("Failed to create log file for generation summary"),
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(filename)
+                .expect("Failed to create log file for generation summary"),
         ) as Box<dyn io::Write>
     } else {
         Box::new(io::stdout()) as Box<dyn io::Write>
     };
     let mut log_individual = if let Some(ref filename) = args.log_individual {
         Box::new(
-            fs::File::create(filename).expect("Failed to create log file for individual results"),
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(filename)
+                .expect("Failed to create log file for individual results"),
         ) as Box<dyn io::Write>
     } else {
         Box::new(io::sink()) as Box<dyn io::Write>
