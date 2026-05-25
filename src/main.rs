@@ -512,7 +512,10 @@ impl<'a> Autotuner<'a> {
     fn compile(&self, individual: &mut Individual) {
         let working_directory = self.get_working_directory(individual);
         if !working_directory.exists() {
-            fs::create_dir(&working_directory).unwrap();
+            let result = fs::create_dir(&working_directory);
+            if result.is_err() {
+                return;
+            }
         }
 
         let path = working_directory.join("lib.so");
