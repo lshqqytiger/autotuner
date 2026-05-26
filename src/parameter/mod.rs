@@ -2,7 +2,7 @@ mod condition;
 
 pub(crate) mod space;
 
-use crate::{configuration::Mutation, individual::Individual, utils::interner::Intern};
+use crate::{configuration::Mutation, individual::Individual};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
@@ -132,7 +132,20 @@ impl Profile {
                 let mut parts = pair.splitn(2, '=');
                 let name = parts.next().unwrap();
                 let value = parts.next().unwrap();
-                (name.intern(), self.0[name].string_to_value(value))
+                (name, value)
+            })
+            .collect::<BTreeMap<&str, &str>>();
+        let parameters = self
+            .0
+            .iter()
+            .map(|(name, spec)| {
+                let value = if let Some(&value) = parameters.get(name.as_ref()) {
+                    spec.string_to_value(value)
+                } else {
+                    eprintln!("warning: parameter '{}' is missing", name);
+                    spec.get_space().random()
+                };
+                (name.clone(), value)
             })
             .collect::<BTreeMap<Arc<str>, Value>>();
         Individual::new(parameters)
