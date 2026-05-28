@@ -19,7 +19,7 @@ use crate::{
     utils::{manually_move::ManuallyMove, union::Union},
 };
 use anyhow::anyhow;
-use argh::FromArgs;
+use argh::{FromArgValue, FromArgs};
 use fxhash::FxHashSet;
 use libc::{SIGQUIT, SIGSEGV};
 use libloading::Library;
@@ -28,6 +28,50 @@ use rayon::iter::{IntoParallelIterator, IntoParallelRefMutIterator, ParallelIter
 use signal_hook_registry::{register, register_unchecked, unregister};
 use std::{fs, hint, io, path, process, time::SystemTime};
 use tempdir::TempDir;
+
+struct CoreIds(Vec<usize>);
+
+impl CoreIds {
+    fn new() -> Self {
+        if let Ok(affinity) = affinity::get_thread_affinity() {
+            CoreIds(affinity)
+        } else {
+            CoreIds(Vec::new())
+        }
+    }
+}
+
+impl FromArgValue for CoreIds {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        let mut cores = Vec::new();
+        for part in value.split(',') {
+            if let Some((start, end)) = part.split_once('-') {
+                let start: usize = start
+                    .parse()
+                    .map_err(|_| format!("Invalid core ID: {}", start))?;
+                let end: usize = end
+                    .parse()
+                    .map_err(|_| format!("Invalid core ID: {}", end))?;
+                if start > end {
+                    return Err(format!("Invalid core range: {}", part));
+                }
+                cores.extend(start..=end);
+            } else {
+                let core: usize = part
+                    .parse()
+                    .map_err(|_| format!("Invalid core ID: {}", part))?;
+                cores.push(core);
+            }
+        }
+        Ok(CoreIds(cores))
+    }
+}
+
+impl AsRef<[usize]> for CoreIds {
+    fn as_ref(&self) -> &[usize] {
+        &self.0
+    }
+}
 
 #[derive(FromArgs)]
 /// CLI Arguments
@@ -47,9 +91,9 @@ struct Options {
     /// path to hook files
     hook: Vec<String>,
 
-    #[argh(option, short = 'c', default = "Vec::new()")]
+    #[argh(option, short = 'c', default = "CoreIds::new()")]
     /// CPU cores to use
-    cores: Vec<usize>,
+    cores: CoreIds,
 
     #[argh(option, short = 'r', default = "15")]
     /// number of repetitions for each individual (default: 15)
@@ -151,6 +195,12 @@ impl<'a> Autotuner<'a> {
         }
         if configuration.hyperparameters.generate.value == 0 {
             return Err(anyhow!("Number of each generation must be greater than 0"));
+        }
+
+        if cores.is_empty() {
+            return Err(anyhow!(
+                "Failed to get CPU affinity. Please specify CPU cores to use with -c option."
+            ));
         }
 
         let working_dir = WorkingDir::try_from(working_dir)?;
@@ -636,7 +686,7 @@ fn main() -> anyhow::Result<()> {
         &args.helper,
         &args.hook,
         configuration,
-        &args.cores,
+        args.cores.as_ref(),
         args.working_dir.as_ref(),
     )?;
     match_union!(
