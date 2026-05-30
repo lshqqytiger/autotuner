@@ -110,10 +110,16 @@ pub(crate) fn mutate(profile: &Profile, options: &Mutation, individual: &mut Ind
     profile.adjust(individual);
 }
 
-pub(crate) fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize) -> Vec<usize> {
+pub(crate) fn stochastic_universal_sampling(
+    roulette: &[(f64, usize)],
+    n: usize,
+    unique: bool,
+) -> Vec<usize> {
     assert!(!roulette.is_empty());
     assert_ne!(n, 0);
-    assert!(n <= roulette.len());
+    if unique {
+        assert!(n <= roulette.len());
+    }
 
     let total_fitness: f64 = roulette.iter().map(|(fitness, _)| fitness).sum();
 
@@ -138,8 +144,10 @@ pub(crate) fn stochastic_universal_sampling(roulette: &[(f64, usize)], n: usize)
             position = roulette.len() - 1;
         }
 
-        while !selected_positions.insert(position) {
-            position = (position + 1) % roulette.len();
+        if unique {
+            while !selected_positions.insert(position) {
+                position = (position + 1) % roulette.len();
+            }
         }
 
         selected.push(roulette[position].1);

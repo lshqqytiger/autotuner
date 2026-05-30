@@ -173,9 +173,4 @@ impl Individual {
         profile.adjust(&mut individual);
         individual
     }
-
-    pub(crate) fn reset(&mut self) {
-        self.arguments.clear();
-        self.fitness = Fitness::Unknown;
-    }
 }

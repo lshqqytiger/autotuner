@@ -397,15 +397,19 @@ impl<'a> Autotuner<'a> {
             writeln!(log_summary).unwrap();
 
             // select individuals to remove
+            // deletion weight = distance from best (worse individuals get larger
+            // weight, so they are more likely to be deleted); invalid individuals
+            // get the maximum weight to be deleted first.
+            let max_delete_weight = (best - worst).abs();
             let mut inverted = flattened.clone();
             for pair in &mut inverted {
                 if pair.0.is_infinite() {
-                    pair.0 = worst;
+                    pair.0 = max_delete_weight;
                     continue;
                 }
 
                 pair.0 = match self.configuration.direction {
-                    Direction::Minimize => pair.0,
+                    Direction::Minimize => pair.0 - best,
                     Direction::Maximize => best - pair.0,
                 };
             }
@@ -418,25 +422,25 @@ impl<'a> Autotuner<'a> {
             let mut holes = genetic::stochastic_universal_sampling(
                 &inverted,
                 state.hyperparameters.delete.value,
+                true,
             );
             drop(inverted);
 
+            // parent selection weight = distance from worst (better individuals get
+            // larger weight, so they are more likely to be selected); invalid
+            // individuals get zero weight so they are never selected as parents.
             for result in &mut flattened {
                 if result.0.is_infinite() {
-                    result.0 = best;
+                    result.0 = 0.0;
                     continue;
                 }
 
                 result.0 = match self.configuration.direction {
                     Direction::Minimize => worst - result.0,
-                    Direction::Maximize => result.0,
+                    Direction::Maximize => result.0 - worst,
                 };
             }
             flattened.shuffle(&mut rng);
-
-            for individual in &mut state.population {
-                individual.reset();
-            }
 
             // generate & evaluate children
             let mut children = Vec::with_capacity(state.hyperparameters.generate.value);
@@ -446,7 +450,7 @@ impl<'a> Autotuner<'a> {
                 let mut current = (0..num_current)
                     .into_par_iter()
                     .map(|_| {
-                        let result = genetic::stochastic_universal_sampling(&flattened, 2);
+                        let result = genetic::stochastic_universal_sampling(&flattened, 2, false);
                         let mut child = genetic::crossover(
                             &self.configuration.profile,
                             &state.population[result[0]],
@@ -484,6 +488,7 @@ impl<'a> Autotuner<'a> {
                         break;
                     }
 
+                    output.ranking.push(&current[index]);
                     index += 1;
                 }
 
@@ -723,4 +728,25 @@ fn main() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_core_ids_from_arg_value() {
+        let cases = vec![
+            ("0", vec![0]),
+            ("0,1,2", vec![0, 1, 2]),
+            ("0-2", vec![0, 1, 2]),
+            ("0-1,3", vec![0, 1, 3]),
+            ("1,3-4", vec![1, 3, 4]),
+        ];
+
+        for (input, expected) in cases {
+            let core_ids = CoreIds::from_arg_value(input).unwrap();
+            assert_eq!(core_ids.as_ref(), expected.as_slice());
+        }
+    }
 }
