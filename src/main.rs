@@ -586,6 +586,7 @@ impl<'a> Autotuner<'a> {
             }
         }
         if context.individual.fitness == Fitness::Invalid {
+            let _ = fs::remove_dir(&working_directory);
             return;
         }
 
